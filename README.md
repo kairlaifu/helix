@@ -29,7 +29,13 @@ For more information, see the [website](https://helix-editor.com) or
 All shortcuts/keymaps can be found [in the documentation on the website](https://docs.helix-editor.com/keymap.html).
 
 [Troubleshooting](https://github.com/helix-editor/helix/wiki/Troubleshooting)
+# About This Fork
 
+- This fork will be synchronized with the main branch of the source frequently
+- This fork might be unstable.
+- The difference between this fork and the source are
+  - TBD
+     
 # Features
 
 - Vim-like modal editing
