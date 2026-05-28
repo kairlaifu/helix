@@ -33,8 +33,9 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
 
 - This fork will be synchronized with the main branch of the source frequently
 - This fork might be unstable.
-- The difference between this fork and the source are
-  - TBD
+- The following pull requests have been merged to this fork 
+  - [feat: Inline Git Blame](https://github.com/helix-editor/helix/pull/13133)
+  - 
      
 # Features
 
