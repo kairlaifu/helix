@@ -35,7 +35,7 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
 - This fork might be unstable.
 - The following pull requests have been merged to this fork 
   - [feat: Inline Git Blame](https://github.com/helix-editor/helix/pull/13133)
-  - 
+  - [File Explorer: create/delete/copy/move/rename](https://github.com/helix-editor/helix/pull/12902)
      
 # Features
 
