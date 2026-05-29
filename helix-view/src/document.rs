@@ -1457,6 +1457,7 @@ impl Document {
     /// Remove a view's selection and inlay hints from this document.
     pub fn remove_view(&mut self, view_id: ViewId) {
         self.selections.remove(&view_id);
+        self.view_data.remove(&view_id);
         self.inlay_hints.remove(&view_id);
         self.jump_labels.remove(&view_id);
         self.document_highlights.remove(&view_id);
