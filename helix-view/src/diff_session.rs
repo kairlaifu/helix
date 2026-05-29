@@ -10,6 +10,38 @@ use imara_diff::{Algorithm, Diff, InternedInput, TokenSource};
 use crate::{DocumentId, ViewId};
 
 struct RopeLines<'a>(RopeSlice<'a>);
+struct TrimmedRopeLines<'a>(RopeSlice<'a>);
+
+/// Iterator over lines that trims leading/trailing whitespace from each line
+/// before handing it to the diff engine. This makes line-level hunk matching
+/// ignore edge whitespace differences while preserving line structure.
+struct TrimmedRopeLinesIter<'a> {
+    inner: helix_core::ropey::iter::Lines<'a>,
+}
+
+impl<'a> Iterator for TrimmedRopeLinesIter<'a> {
+    type Item = RopeSlice<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(trim_rope_slice_whitespace)
+    }
+}
+
+/// Trim leading and trailing Unicode whitespace from a rope slice and return a
+/// subslice into the original rope.
+fn trim_rope_slice_whitespace(line: RopeSlice<'_>) -> RopeSlice<'_> {
+    let mut start = 0usize;
+    let mut end = line.len_chars();
+
+    while start < end && line.char(start).is_whitespace() {
+        start += 1;
+    }
+    while end > start && line.char(end - 1).is_whitespace() {
+        end -= 1;
+    }
+
+    line.slice(start..end)
+}
 
 impl<'a> imara_diff::TokenSource for RopeLines<'a> {
     type Token = RopeSlice<'a>;
@@ -17,6 +49,21 @@ impl<'a> imara_diff::TokenSource for RopeLines<'a> {
 
     fn tokenize(&self) -> Self::Tokenizer {
         self.0.lines()
+    }
+
+    fn estimate_tokens(&self) -> u32 {
+        self.0.len_lines() as u32
+    }
+}
+
+impl<'a> imara_diff::TokenSource for TrimmedRopeLines<'a> {
+    type Token = RopeSlice<'a>;
+    type Tokenizer = TrimmedRopeLinesIter<'a>;
+
+    fn tokenize(&self) -> Self::Tokenizer {
+        TrimmedRopeLinesIter {
+            inner: self.0.lines(),
+        }
     }
 
     fn estimate_tokens(&self) -> u32 {
@@ -105,6 +152,43 @@ fn word_token_char_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+/// Trim leading/trailing whitespace from an intra-line change range.
+///
+/// Returns `None` when the range becomes empty after trimming, which means the
+/// change was whitespace-only at a line boundary.
+fn trim_inline_change_whitespace(change: InlineChange, rope: &Rope) -> Option<InlineChange> {
+    let abs = change.to_char_range(rope);
+    if abs.start >= abs.end {
+        return None;
+    }
+
+    let text: String = rope.slice(abs.clone()).into();
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+
+    let mut start_off = 0usize;
+    while start_off < chars.len() && chars[start_off].is_whitespace() {
+        start_off += 1;
+    }
+
+    let mut end_off = chars.len();
+    while end_off > start_off && chars[end_off - 1].is_whitespace() {
+        end_off -= 1;
+    }
+
+    if start_off == end_off {
+        return None;
+    }
+
+    Some(InlineChange {
+        doc_line: change.doc_line,
+        col_start: change.col_start + start_off,
+        col_end: change.col_start + end_off,
+    })
+}
+
 /// A diff session pairs two views for side-by-side diff comparison.
 /// It holds the computed hunks between their documents and coordinates
 /// scroll synchronization and alignment.
@@ -155,13 +239,14 @@ impl DiffSession {
         version_b: i32,
         rope_a: &Rope,
         rope_b: &Rope,
+        ignore_whitespace: bool,
     ) -> bool {
         if !self.needs_update(version_a, version_b) {
             return false;
         }
         self.version_a = Some(version_a);
         self.version_b = Some(version_b);
-        self.compute_hunks(rope_a, rope_b);
+        self.compute_hunks_with_options(rope_a, rope_b, ignore_whitespace);
         true
     }
 
@@ -213,16 +298,47 @@ impl DiffSession {
     /// `rope_a` corresponds to the left/before side, `rope_b` to the right/after side.
     /// Also rebuilds the intra-line character diff cache, indexed parallel to `hunks`.
     pub fn compute_hunks(&mut self, rope_a: &Rope, rope_b: &Rope) {
-        let input = InternedInput::new(RopeLines(rope_a.slice(..)), RopeLines(rope_b.slice(..)));
-        let mut diff = Diff::compute(Algorithm::Histogram, &input);
-        diff.postprocess_with(
-            &input.before,
-            &input.after,
-            imara_diff::IndentHeuristic::new(|token| {
-                imara_diff::IndentLevel::for_ascii_line(input.interner[token].bytes(), 4)
-            }),
-        );
-        self.hunks = Arc::new(diff.hunks().collect());
+        self.compute_hunks_with_options(rope_a, rope_b, true);
+    }
+
+    /// Computes line-level hunks between two Ropes with configurable line-edge
+    /// whitespace handling.
+    ///
+    /// When `ignore_whitespace` is true, leading and trailing whitespace on each
+    /// line is ignored for line-level hunk matching.
+    pub fn compute_hunks_with_options(
+        &mut self,
+        rope_a: &Rope,
+        rope_b: &Rope,
+        ignore_whitespace: bool,
+    ) {
+        self.hunks = if ignore_whitespace {
+            let input = InternedInput::new(
+                TrimmedRopeLines(rope_a.slice(..)),
+                TrimmedRopeLines(rope_b.slice(..)),
+            );
+            let mut diff = Diff::compute(Algorithm::Histogram, &input);
+            diff.postprocess_with(
+                &input.before,
+                &input.after,
+                imara_diff::IndentHeuristic::new(|token| {
+                    imara_diff::IndentLevel::for_ascii_line(input.interner[token].bytes(), 4)
+                }),
+            );
+            Arc::new(diff.hunks().collect())
+        } else {
+            let input = InternedInput::new(RopeLines(rope_a.slice(..)), RopeLines(rope_b.slice(..)));
+            let mut diff = Diff::compute(Algorithm::Histogram, &input);
+            diff.postprocess_with(
+                &input.before,
+                &input.after,
+                imara_diff::IndentHeuristic::new(|token| {
+                    imara_diff::IndentLevel::for_ascii_line(input.interner[token].bytes(), 4)
+                }),
+            );
+            Arc::new(diff.hunks().collect())
+        };
+
         // Rebuild cache parallel to hunks. Pure insertions/deletions get empty entries
         // (nothing to diff at the character level when one side is empty).
         self.intra_line_cache = Arc::new(
@@ -615,6 +731,15 @@ pub fn intra_line_changes(
         }
     }
 
+    let changes_a = changes_a
+        .into_iter()
+        .filter_map(|change| trim_inline_change_whitespace(change, rope_a))
+        .collect();
+    let changes_b = changes_b
+        .into_iter()
+        .filter_map(|change| trim_inline_change_whitespace(change, rope_b))
+        .collect();
+
     (changes_a, changes_b)
 }
 
@@ -916,6 +1041,47 @@ mod tests {
         assert_eq!(hunk.before.end, 2);
         assert_eq!(hunk.after.start, 1);
         assert_eq!(hunk.after.end, 2);
+    }
+
+    #[test]
+    fn compute_hunks_ignores_leading_trailing_whitespace_only_modification() {
+        let mut session = make_session();
+        let rope_a = Rope::from("line1\n  hello   \nline3\n");
+        let rope_b = Rope::from("line1\nhello\nline3\n");
+
+        session.compute_hunks(&rope_a, &rope_b);
+
+        assert!(
+            session.hunks().is_empty(),
+            "line-level diff should ignore leading/trailing whitespace-only edits"
+        );
+    }
+
+    #[test]
+    fn compute_hunks_still_detects_internal_whitespace_change() {
+        let mut session = make_session();
+        let rope_a = Rope::from("line1\nhello world\nline3\n");
+        let rope_b = Rope::from("line1\nhello  world\nline3\n");
+
+        session.compute_hunks(&rope_a, &rope_b);
+
+        assert_eq!(session.hunks().len(), 1);
+        let hunk = &session.hunks()[0];
+        assert_eq!(hunk.before, 1..2);
+        assert_eq!(hunk.after, 1..2);
+    }
+
+    #[test]
+    fn compute_hunks_option_false_detects_edge_whitespace_change() {
+        let mut session = make_session();
+        let rope_a = Rope::from("line1\n  hello   \nline3\n");
+        let rope_b = Rope::from("line1\nhello\nline3\n");
+
+        session.compute_hunks_with_options(&rope_a, &rope_b, false);
+
+        assert_eq!(session.hunks().len(), 1);
+        assert_eq!(session.hunks()[0].before, 1..2);
+        assert_eq!(session.hunks()[0].after, 1..2);
     }
 
     #[test]
@@ -1724,7 +1890,7 @@ mod tests {
         let cached_v1 = session.intra_line_changes_for(0).unwrap().clone();
 
         // Simulate a document edit: version changes, triggering recomputation.
-        session.update_if_changed(1, 1, &rope_a, &rope_b_v2);
+        session.update_if_changed(1, 1, &rope_a, &rope_b_v2, true);
         let cached_v2 = session.intra_line_changes_for(0).unwrap();
 
         assert_ne!(
@@ -1776,5 +1942,62 @@ mod tests {
             changes_b[0].col_end, 11,
             "change should end after 'h' of 'earth'"
         );
+    }
+
+    #[test]
+    fn intra_line_diff_ignores_leading_whitespace_only_changes() {
+        let rope_a = Rope::from("    hello\n");
+        let rope_b = Rope::from("  hello\n");
+        let hunk = helix_vcs::Hunk {
+            before: 0..1,
+            after: 0..1,
+        };
+
+        let (changes_a, changes_b) = intra_line_changes(&rope_a, &rope_b, &hunk);
+        assert!(
+            changes_a.is_empty(),
+            "leading indentation-only changes should be ignored on A"
+        );
+        assert!(
+            changes_b.is_empty(),
+            "leading indentation-only changes should be ignored on B"
+        );
+    }
+
+    #[test]
+    fn intra_line_diff_ignores_trailing_whitespace_only_changes() {
+        let rope_a = Rope::from("hello   \n");
+        let rope_b = Rope::from("hello\n");
+        let hunk = helix_vcs::Hunk {
+            before: 0..1,
+            after: 0..1,
+        };
+
+        let (changes_a, changes_b) = intra_line_changes(&rope_a, &rope_b, &hunk);
+        assert!(
+            changes_a.is_empty(),
+            "trailing whitespace-only changes should be ignored on A"
+        );
+        assert!(
+            changes_b.is_empty(),
+            "trailing whitespace-only changes should be ignored on B"
+        );
+    }
+
+    #[test]
+    fn intra_line_diff_trims_edge_whitespace_from_changed_word_span() {
+        let rope_a = Rope::from("  old  \n");
+        let rope_b = Rope::from(" new \n");
+        let hunk = helix_vcs::Hunk {
+            before: 0..1,
+            after: 0..1,
+        };
+
+        let (changes_a, changes_b) = intra_line_changes(&rope_a, &rope_b, &hunk);
+
+        assert_eq!(changes_a.len(), 1);
+        assert_eq!(changes_b.len(), 1);
+        assert_eq!((changes_a[0].col_start, changes_a[0].col_end), (2, 5));
+        assert_eq!((changes_b[0].col_start, changes_b[0].col_end), (1, 4));
     }
 }

@@ -440,6 +440,9 @@ pub struct Config {
     /// Whether to automatically remove all whitespace characters preceding line-endings on write.
     /// Defaults to `false`.
     pub trim_trailing_whitespace: bool,
+    /// Whether to ignore leading and trailing whitespace in line-level diff matching.
+    /// Defaults to `true`.
+    pub diff_ignore_whitespace: bool,
     /// Enables smart tab
     pub smart_tab: Option<SmartTabConfig>,
     /// Draw border around popups.
@@ -1181,6 +1184,7 @@ impl Default for Config {
             atomic_save: true,
             trim_final_newlines: false,
             trim_trailing_whitespace: false,
+            diff_ignore_whitespace: true,
             smart_tab: Some(SmartTabConfig::default()),
             popup_border: PopupBorderConfig::None,
             indent_heuristic: IndentationHeuristic::default(),

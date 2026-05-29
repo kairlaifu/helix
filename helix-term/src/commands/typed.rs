@@ -2649,9 +2649,10 @@ fn diff_open(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> an
 
     let rope_a = cx.editor.documents[&doc_a].text().clone();
     let rope_b = cx.editor.documents[&doc_b].text().clone();
+    let ignore_whitespace = cx.editor.config().diff_ignore_whitespace;
 
     let mut session = helix_view::diff_session::DiffSession::new(view_a, view_b, doc_a, doc_b);
-    session.compute_hunks(&rope_a, &rope_b);
+    session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
 
     cx.editor.diff_sessions.push(session);
     cx.editor.set_status(format!(
@@ -2882,6 +2883,7 @@ fn diff_this(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
 
             let rope_a = cx.editor.documents[&other_doc_id].text().clone();
             let rope_b = cx.editor.documents[&this_doc_id].text().clone();
+            let ignore_whitespace = cx.editor.config().diff_ignore_whitespace;
 
             let mut session = helix_view::diff_session::DiffSession::new(
                 other_view_id,
@@ -2889,7 +2891,7 @@ fn diff_this(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
                 other_doc_id,
                 this_doc_id,
             );
-            session.compute_hunks(&rope_a, &rope_b);
+            session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
             cx.editor.diff_sessions.push(session);
             cx.editor.set_status("Diff session started.");
         }

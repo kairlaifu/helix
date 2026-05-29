@@ -270,7 +270,7 @@ impl EditorView {
         Self::doc_diagnostics_highlights_into(doc, theme, &mut overlays);
 
         // Full-line diff overlays. Pushed BEFORE the intra-line overlay below
-        // so intra-line (diff.delta.text) wins on changed-token cells via
+        // so intra-line token overlays win on changed-token cells via
         // overlay ordering. Line decoration already sets the full-width bg;
         // these overlays add fg (and an identical bg patch) to character
         // cells so theme fg overrides syntax — classic vim "whole line in
@@ -316,18 +316,24 @@ impl EditorView {
         }
 
         // Intra-line diff highlighting via OverlayHighlights.
-        // Prefer the most-specific scope, falling back through the namespace chain:
-        // `diff.delta.view.text` (intra-line override in the diff viewer)
-        //   -> `diff.delta.view` (line-level override in the diff viewer)
-        //   -> `diff.delta` (legacy / shared).
-        // The hop into the `.view` namespace keeps the diff viewer's styling distinct
-        // from the bare `diff.delta` scope, which is shared with the diff language
-        // grammar and the VCS gutter.
+        // Use side-specific scopes for modified lines:
+        // left pane (A) -> `diff.minus.*`, right pane (B) -> `diff.plus.*`.
+        // Fall back to `diff.delta.*` for themes that only define a shared modified scope.
+        // The `.view` namespace keeps diff-viewer styling distinct from grammar/gutter scopes.
         if let Some((side, _, _, ref intra_line_cache, (doc_a_id, doc_b_id))) = diff_view_info {
-            let intra_highlight = theme
-                .find_highlight_exact("diff.delta.view.text")
-                .or_else(|| theme.find_highlight_exact("diff.delta.view"))
-                .or_else(|| theme.find_highlight_exact("diff.delta"));
+            let intra_highlight = match side {
+                helix_view::diff_session::DiffSide::A => theme
+                    .find_highlight_exact("diff.minus.view.text")
+                    .or_else(|| theme.find_highlight_exact("diff.minus.view"))
+                    .or_else(|| theme.find_highlight_exact("diff.minus")),
+                helix_view::diff_session::DiffSide::B => theme
+                    .find_highlight_exact("diff.plus.view.text")
+                    .or_else(|| theme.find_highlight_exact("diff.plus.view"))
+                    .or_else(|| theme.find_highlight_exact("diff.plus")),
+            }
+            .or_else(|| theme.find_highlight_exact("diff.delta.view.text"))
+            .or_else(|| theme.find_highlight_exact("diff.delta.view"))
+            .or_else(|| theme.find_highlight_exact("diff.delta"));
             if let Some(highlight) = intra_highlight {
                 let rope_a = editor.documents[&doc_a_id].text().clone();
                 let rope_b = editor.documents[&doc_b_id].text().clone();
@@ -1948,7 +1954,13 @@ impl Component for EditorView {
             if session.needs_update(version_a, version_b) {
                 let rope_a = cx.editor.documents[&session.doc_a()].text().clone();
                 let rope_b = cx.editor.documents[&session.doc_b()].text().clone();
-                session.update_if_changed(version_a, version_b, &rope_a, &rope_b);
+                session.update_if_changed(
+                    version_a,
+                    version_b,
+                    &rope_a,
+                    &rope_b,
+                    config.diff_ignore_whitespace,
+                );
             }
         }
 

@@ -198,10 +198,11 @@ impl Application {
 
             let rope_a = editor.documents[&doc_a].text().clone();
             let rope_b = editor.documents[&doc_b].text().clone();
+            let ignore_whitespace = editor.config().diff_ignore_whitespace;
 
             let mut session =
                 helix_view::diff_session::DiffSession::new(view_a, view_b, doc_a, doc_b);
-            session.compute_hunks(&rope_a, &rope_b);
+            session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
             editor.diff_sessions.push(session);
 
             editor.set_status(format!(
