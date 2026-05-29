@@ -36,6 +36,7 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
 - The following pull requests have been merged to this fork 
   - [feat: Inline Git Blame](https://github.com/helix-editor/helix/pull/13133)
   - [File Explorer: create/delete/copy/move/rename](https://github.com/helix-editor/helix/pull/12902)
+  - [feat: implement auto-scrolling bufferline](https://github.com/helix-editor/helix/pull/14072)
      
 # Features
 
