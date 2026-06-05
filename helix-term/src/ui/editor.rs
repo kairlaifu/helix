@@ -625,6 +625,11 @@ impl EditorView {
         theme: &Theme,
         overlay_highlights: &mut Vec<OverlayHighlights>,
     ) {
+        // Skip redundant work if no diagnostics.
+        if doc.diagnostics().is_empty() {
+            return;
+        }
+
         use helix_core::diagnostic::{DiagnosticTag, Range, Severity};
         let get_scope_of = |scope| {
             theme
