@@ -46,3 +46,42 @@ public:
 private:
   super_secret_private_fn();
 }
+
+namespace geometry {
+
+  template <typename T>
+  class Point {
+  public:
+    Point(T x, T y) : x_(x), y_(y) {}
+
+    T sum() const {
+      return x_ + y_;
+    }
+
+  private:
+    T x_;
+    T y_;
+  };
+
+  enum class Color {
+    Red,
+    Green,
+    Blue,
+  };
+
+  void iterate(const std::vector<int> &items) {
+    for (const auto &item : items) {
+      try {
+        process(item);
+      } catch (const std::exception &e) {
+        handle(e);
+      }
+    }
+  }
+
+} // namespace geometry
+
+const char *raw = R"(
+unindented
+  indented
+)";

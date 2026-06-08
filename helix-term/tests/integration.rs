@@ -15,7 +15,6 @@ mod test {
         Ok(())
     }
 
-    mod auto_indent;
     mod auto_pairs;
     mod command_line;
     mod commands;

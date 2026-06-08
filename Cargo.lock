@@ -3528,8 +3528,10 @@ version = "25.7.1"
 dependencies = [
  "helix-core",
  "helix-loader",
+ "helix-stdx",
  "helix-term",
  "helix-view",
+ "ropey",
  "toml",
 ]
 
