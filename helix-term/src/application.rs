@@ -109,20 +109,7 @@ fn setup_integration_logging() {
         .map(|lvl| lvl.parse().unwrap())
         .unwrap_or(log::LevelFilter::Info);
 
-    // Separate file config so we can include year, month and day in file logs
-    let _ = fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "{} {} [{}] {}",
-                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f"),
-                record.target(),
-                record.level(),
-                message
-            ))
-        })
-        .level(level)
-        .chain(std::io::stdout())
-        .apply();
+    crate::logging::init_stdout(level);
 }
 
 impl Application {

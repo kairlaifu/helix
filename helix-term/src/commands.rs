@@ -87,9 +87,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use helix_stdx::Url;
 use once_cell::sync::Lazy;
 use serde::de::{self, Deserialize, Deserializer};
-use url::Url;
 
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{sinks, BinaryDetection, SearcherBuilder};
@@ -1577,14 +1577,14 @@ fn should_open_url_externally(url: &Url) -> bool {
         return true;
     }
 
-    let content_type = std::fs::File::open(url.path()).and_then(|file| {
+    let is_binary = std::fs::File::open(url.path()).and_then(|file| {
         // Read up to 1kb to detect the content type
         let mut read_buffer = Vec::new();
         let n = file.take(1024).read_to_end(&mut read_buffer)?;
-        Ok(content_inspector::inspect(&read_buffer[..n]))
+        Ok(crate::is_binary(&read_buffer[..n]))
     });
 
-    matches!(content_type, Ok(content_inspector::ContentType::BINARY))
+    matches!(is_binary, Ok(true))
 }
 
 fn extend_word_impl<F>(cx: &mut Context, extend_fn: F)
@@ -5619,19 +5619,44 @@ type CommentTransactionFn = fn(
 ) -> Transaction;
 
 fn toggle_comments_impl(cx: &mut Context, comment_transaction: CommentTransactionFn) {
-    let loader = cx.editor.syn_loader.load();
+    let loader: &helix_core::syntax::Loader = &cx.editor.syn_loader.load();
     let (view, doc) = current!(cx.editor);
-    // Pick the comment tokens of the layer at the primary cursor.
     let cursor = doc
         .selection(view.id)
         .primary()
         .cursor(doc.text().slice(..));
     let byte_pos = doc.text().char_to_byte(cursor);
-    let lang_config = doc.language_config_at(&loader, byte_pos);
+    // Resolve the comment tokens from the enclosing injection layer that owns the comment,
+    // not the innermost layer at the cursor. Prefer the innermost layer that defines
+    // *line* comment tokens, falling back to the innermost layer with block tokens.
+    let mut line_layer = None;
+    let mut block_layer = None;
+    if let Some(syntax) = doc.syntax() {
+        for layer in syntax.layers_for_byte_range(byte_pos as u32, byte_pos as u32) {
+            let language = syntax.layer(layer).language;
+            let config = loader.language(language).config();
+            if config.comment_tokens.is_some() {
+                line_layer = Some(language);
+            }
+            if config.block_comment_tokens.is_some() {
+                block_layer = Some(language);
+            }
+        }
+    }
+    let lang_config = line_layer
+        .or(block_layer)
+        .map(|language| &**loader.language(language).config())
+        .or_else(|| doc.language_config());
+
+    // Pick the token the cursor's line is already commented with (longest match, so `///` wins over `//`).
+    // If the line isn't commented yet, fall back to the primary token for adding a comment.
+    let cursor_line = doc.text().char_to_line(cursor);
     let line_token: Option<&str> = lang_config
         .and_then(|lc| lc.comment_tokens.as_ref())
-        .and_then(|tc| tc.first())
-        .map(|tc| tc.as_str());
+        .and_then(|tokens| {
+            comment::get_comment_token(doc.text().slice(..), tokens, cursor_line)
+                .or_else(|| tokens.first().map(|token| token.as_str()))
+        });
     let block_tokens: Option<&[BlockCommentToken]> = lang_config
         .and_then(|lc| lc.block_comment_tokens.as_ref())
         .map(|tc| &tc[..]);
