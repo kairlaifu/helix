@@ -147,8 +147,14 @@ mod external {
                 Self::Termux
             } else if env_var_is_set("TMUX") && binary_exists("tmux") {
                 Self::Tmux
-            } else if env_var_is_set("WEZTERM_UNIX_SOCKET") && binary_exists("wezterm") {
-                Self::Termcode
+            } else if cfg!(feature = "term")
+                && env_var_is_set("WEZTERM_UNIX_SOCKET")
+                && binary_exists("wezterm")
+            {
+                #[cfg(feature = "term")]
+                return Self::Termcode;
+                #[cfg(not(feature = "term"))]
+                return Self::None;
             } else if env_var_is_set("WAYLAND_DISPLAY")
                 && binary_exists("wl-copy")
                 && binary_exists("wl-paste")
@@ -168,7 +174,7 @@ mod external {
                 #[cfg(feature = "term")]
                 return Self::Termcode;
                 #[cfg(not(feature = "term"))]
-                Self::None
+                return Self::None;
             }
         }
     }
