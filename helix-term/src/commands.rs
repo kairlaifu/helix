@@ -3711,6 +3711,13 @@ pub(crate) fn blame_line_impl(editor: &mut Editor, doc_id: DocumentId, cursor_li
                     helix_view::handlers::BlameEvent {
                         path: path.to_path_buf(),
                         doc_id: doc.id(),
+                        is_workspace_truest: editor
+                            .workspace_trust
+                            .query(
+                                doc.workspace_root(),
+                                helix_loader::workspace_trust::TrustQuery::Git,
+                            )
+                            .is_trusted(),
                         line: Some(cursor_line),
                     },
                 );

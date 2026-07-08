@@ -2,6 +2,7 @@ use std::{mem, time::Duration};
 
 use helix_event::register_hook;
 use helix_vcs::FileBlame;
+use helix_view::Editor;
 use helix_view::{
     events::{DocumentDidOpen, EditorConfigDidChange},
     handlers::{BlameEvent, Handlers},
@@ -34,7 +35,7 @@ impl helix_event::AsyncHook for BlameHandler {
     ) -> Option<tokio::time::Instant> {
         self.doc_id = event.doc_id;
         self.show_blame_for_line_in_statusline = event.line;
-        self.file_blame = Some(FileBlame::try_new(event.path));
+        self.file_blame = Some(FileBlame::try_new(event.path, event.is_workspace_truest));
         Some(Instant::now() + Duration::from_millis(50))
     }
 
@@ -62,16 +63,26 @@ impl helix_event::AsyncHook for BlameHandler {
         }
     }
 }
-
+fn trust_full_for_path(editor: &Editor, path: &std::path::Path) -> bool {
+    editor
+        .workspace_trust
+        .query(
+            &helix_loader::find_workspace_in(path).0,
+            helix_loader::workspace_trust::TrustQuery::Git,
+        )
+        .is_trusted()
+}
 pub(super) fn register_hooks(handlers: &Handlers) {
     let tx = handlers.blame.clone();
     register_hook!(move |event: &mut DocumentDidOpen<'_>| {
         if event.editor.config().inline_blame.auto_fetch {
+            let trust_full = trust_full_for_path(event.editor, event.path);
             helix_event::send_blocking(
                 &tx,
                 BlameEvent {
                     path: event.path.to_path_buf(),
                     doc_id: event.doc,
+                    is_workspace_truest: trust_full,
                     line: None,
                 },
             );
@@ -88,11 +99,13 @@ pub(super) fn register_hooks(handlers: &Handlers) {
             // outdated blame
             for doc in event.editor.documents() {
                 if let Some(path) = doc.path() {
+                    let trust_full = trust_full_for_path(event.editor, path);
                     helix_event::send_blocking(
                         &tx,
                         BlameEvent {
                             path: path.to_path_buf(),
                             doc_id: doc.id(),
+                            is_workspace_truest: trust_full,
                             line: None,
                         },
                     );

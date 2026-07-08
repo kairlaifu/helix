@@ -1613,6 +1613,7 @@ fn reload(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyh
                 BlameEvent {
                     path: path.to_path_buf(),
                     doc_id,
+                    is_workspace_truest: trust_full,
                     line: None,
                 },
             );
@@ -1699,6 +1700,7 @@ fn reload_all(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> 
                     BlameEvent {
                         path: path.to_path_buf(),
                         doc_id,
+                        is_workspace_truest: trust_full,
                         line: None,
                     },
                 );
