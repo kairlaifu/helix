@@ -320,7 +320,8 @@ This layer is a kludge of mappings, mostly pickers.
 | `y`     | Yank selections to clipboard                                            | `yank_to_clipboard`                        |
 | `Y`     | Yank main selection to clipboard                                        | `yank_main_selection_to_clipboard`         |
 | `R`     | Replace selections by clipboard contents                                | `replace_selections_with_clipboard`        |
-| `/`     | Global search in workspace folder                                       | `global_search`                            |
+| `/`     | Global regex search in workspace folder                                 | `global_search_regex`                      |
+| `z`     | Global fuzzy search in workspace folder                                 | `global_search`                            |
 | `?`     | Open command palette                                                    | `command_palette`                          |
 | `B`     | Show blame for the current line                                         | `blame_line`                             |
 
