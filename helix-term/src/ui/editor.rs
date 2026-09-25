@@ -1056,21 +1056,6 @@ impl EditorView {
     ) {
         use helix_view::editor::BreadcrumbPathOptions::{File, Full};
 
-        #[inline]
-        #[must_use]
-        fn draw_element(
-            surface: &mut Surface,
-            viewport: Rect,
-            x: u16,
-            content: &str,
-            style: Style,
-        ) -> u16 {
-            let remaining = viewport.right().saturating_sub(x) as usize;
-            surface
-                .set_stringn(x, viewport.y, content, remaining, style)
-                .0
-        }
-
         let config = editor.config();
 
         let style = editor
@@ -1080,11 +1065,10 @@ impl EditorView {
 
         surface.clear_with(viewport, style);
 
-        let mut x = viewport.x.saturating_add(1);
-
         let separator = " > ";
         let separator_style = editor.theme.get("ui.breadcrumb.separator");
         let mut draw_separator = false;
+        let mut elements = Vec::new();
 
         if matches!(config.breadcrumb.path, Full | File) {
             if let Some(path) = doc.relative_path() {
@@ -1106,7 +1090,7 @@ impl EditorView {
 
                 while let Some(component) = components.next() {
                     if draw_separator {
-                        x = draw_element(surface, viewport, x, separator, separator_style);
+                        elements.push((separator.to_owned(), separator_style));
                     } else {
                         draw_separator = true;
                     }
@@ -1120,11 +1104,11 @@ impl EditorView {
                         style
                     };
 
-                    x = draw_element(surface, viewport, x, &segment, style);
+                    elements.push((segment.into_owned(), style));
                 }
             } else {
                 // Handle `[scratch]`
-                x = draw_element(surface, viewport, x, SCRATCH_BUFFER_NAME, style);
+                elements.push((SCRATCH_BUFFER_NAME.to_owned(), style));
             }
         }
 
@@ -1132,7 +1116,7 @@ impl EditorView {
         if let Some(breadcrumb) = doc.breadcrumbs.get(&view.id) {
             for symbol in breadcrumb.iter() {
                 if draw_separator {
-                    x = draw_element(surface, viewport, x, separator, separator_style);
+                    elements.push((separator.to_owned(), separator_style));
                 } else {
                     draw_separator = true;
                 }
@@ -1170,9 +1154,27 @@ impl EditorView {
                     _ => style,
                 };
 
-                x = draw_element(surface, viewport, x, symbol.name.as_ref(), style);
+                elements.push((symbol.name.to_string(), style));
             }
         }
+
+        let spans = elements
+            .into_iter()
+            .map(|(content, style)| Span::styled(content, style))
+            .collect::<Vec<_>>();
+        let text = tui::text::Text::from(tui::text::Spans::from(spans));
+        let paragraph =
+            tui::widgets::Paragraph::new(&text).alignment(tui::layout::Alignment::Right);
+        tui::widgets::Widget::render(
+            paragraph,
+            Rect::new(
+                viewport.x,
+                viewport.y,
+                viewport.width.saturating_sub(1),
+                viewport.height,
+            ),
+            surface,
+        );
     }
 
     pub fn render_gutter<'d>(

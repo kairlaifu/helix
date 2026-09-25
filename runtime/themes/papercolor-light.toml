@@ -45,7 +45,7 @@
 "error" = { bg = "error_bg", fg = "error_fg" }
 "info" = "todo_fg"
 
-"diagnostic.warning" = { fg = "bright0", modifiers = [
+"diagnostic.warning" = { fg = "white", modifiers = [
   "dim",
 ], underline = { color = "bright5", style = "curl" } }
 "diagnostic.error".underline = { color = "bright1", style = "curl" }

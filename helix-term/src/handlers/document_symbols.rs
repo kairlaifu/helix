@@ -1,7 +1,7 @@
 use crate::job;
 use helix_core::syntax::config::LanguageServerFeature;
 use helix_event::{cancelable_future, register_hook};
-use helix_lsp::lsp::DocumentSymbolResponse;
+use helix_lsp::lsp::{DocumentSymbol, DocumentSymbolResponse, SymbolInformation};
 use helix_view::{
     events::{
         ConfigDidChange, DocumentDidChange, DocumentDidOpen, LanguageServerExited,
@@ -10,6 +10,45 @@ use helix_view::{
     handlers::Handlers,
     DocumentId, Editor,
 };
+
+fn flat_symbols_to_nested(symbols: Vec<SymbolInformation>) -> Vec<DocumentSymbol> {
+    fn contains(outer: helix_lsp::lsp::Range, inner: helix_lsp::lsp::Range) -> bool {
+        outer.start <= inner.start && outer.end >= inner.end
+    }
+
+    fn insert_symbol(symbols: &mut Vec<DocumentSymbol>, symbol: DocumentSymbol) {
+        if let Some(parent) = symbols
+            .iter_mut()
+            .find(|parent| contains(parent.range, symbol.range))
+        {
+            insert_symbol(parent.children.get_or_insert_with(Vec::new), symbol);
+        } else {
+            symbols.push(symbol);
+        }
+    }
+
+    let mut symbols = symbols
+        .into_iter()
+        .map(|symbol| DocumentSymbol {
+            name: symbol.name,
+            detail: None,
+            kind: symbol.kind,
+            tags: symbol.tags,
+            deprecated: None,
+            range: symbol.location.range,
+            selection_range: symbol.location.range,
+            children: None,
+        })
+        .collect::<Vec<_>>();
+
+    symbols.sort_by_key(|symbol| (symbol.range.start, std::cmp::Reverse(symbol.range.end)));
+
+    let mut nested = Vec::new();
+    for symbol in symbols {
+        insert_symbol(&mut nested, symbol);
+    }
+    nested
+}
 
 fn request_document_symbols(editor: &mut Editor, doc_id: DocumentId) {
     if !editor.config().breadcrumb.enable {
@@ -45,14 +84,54 @@ fn request_document_symbols(editor: &mut Editor, doc_id: DocumentId) {
                     DocumentSymbolResponse::Nested(symbols) => {
                         doc.set_document_symbols(symbols, offset_encoding);
                     }
-                    // TODO: Using the `Location`, it should be possible to map cursor
-                    // to a hierarchical tree?
-                    DocumentSymbolResponse::Flat(_) => {}
+                    DocumentSymbolResponse::Flat(symbols) => {
+                        doc.set_document_symbols(flat_symbols_to_nested(symbols), offset_encoding);
+                    }
                 }
             }
         })
         .await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::flat_symbols_to_nested;
+    use helix_lsp::lsp::{Location, Position, Range, SymbolInformation, SymbolKind};
+    use url::Url;
+
+    #[test]
+    fn flat_symbols_are_nested_by_range() {
+        let uri = Url::parse("file:///Test.java").unwrap();
+        let symbols = flat_symbols_to_nested(vec![
+            SymbolInformation {
+                name: "method".into(),
+                kind: SymbolKind::METHOD,
+                tags: None,
+                deprecated: None,
+                location: Location {
+                    uri: uri.clone(),
+                    range: Range::new(Position::new(2, 4), Position::new(4, 5)),
+                },
+                container_name: Some("Test".into()),
+            },
+            SymbolInformation {
+                name: "Test".into(),
+                kind: SymbolKind::CLASS,
+                tags: None,
+                deprecated: None,
+                location: Location {
+                    uri,
+                    range: Range::new(Position::new(0, 0), Position::new(6, 1)),
+                },
+                container_name: None,
+            },
+        ]);
+
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "Test");
+        assert_eq!(symbols[0].children.as_ref().unwrap()[0].name, "method");
+    }
 }
 
 pub(super) fn register_hooks(_handlers: &Handlers) {
