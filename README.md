@@ -33,12 +33,17 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
 
 - This fork will be synchronized with the main branch of the source frequently
 - This fork might be unstable.
-- The following pull requests have been merged to this fork 
+- The following pull requests authored by some kind contributors have been merged to this fork, which might not be included in upstream project 
   - [feat: Inline Git Blame](https://github.com/helix-editor/helix/pull/13133)
   - [File Explorer: create/delete/copy/move/rename](https://github.com/helix-editor/helix/pull/12902)
   - [feat: implement auto-scrolling bufferline](https://github.com/helix-editor/helix/pull/14072)
   - [First pass at a very dumb two file diff view](https://github.com/helix-editor/helix/pull/15631)
   - [feat: add fuzzy matching and preview highlights to global search](https://github.com/helix-editor/helix/pull/15285)
+  - [feat: add breadcrumb navigation bar](https://github.com/helix-editor/helix/pull/15573)
+- The following are implemented by me
+  - Display document id number in bufferline labels as prefix, the format is <document id>~<file name>, this is not configurable.
+  - Command "<number> + g + u" to go to the specific buffer directly according to the input number as document id. if the number is not input, or there is no document with the
+      specified document id then an error will be displayed at status line
      
 # Features
 
