@@ -471,6 +471,7 @@ impl MappableCommand {
         goto_column, "Goto column",
         extend_to_column, "Extend to column",
         goto_next_buffer, "Goto next buffer",
+        goto_specific_buffer, "Goto specific buffer according to the buffer id",
         goto_previous_buffer, "Goto previous buffer",
         goto_line_end_newline, "Goto newline at line end",
         goto_first_nonwhitespace, "Goto first non-blank in line",
@@ -919,6 +920,26 @@ fn goto_next_buffer(cx: &mut Context) {
     goto_buffer(cx.editor, Direction::Forward, cx.count());
 }
 
+fn goto_specific_buffer(cx: &mut Context) {
+    let count_opt = cx.count;
+    if let Some(selected_doc_id) = count_opt {
+        let (view, doc) = current!(cx.editor);
+        push_jump(view, doc);
+        let iter = cx.editor.documents.keys();
+        let target_doc_id = iter
+            .filter(|id| id.has_same_num(selected_doc_id.get()))
+            .last();
+        if let Some(doc_id) = target_doc_id {
+            cx.editor.switch(*doc_id, Action::Replace);
+        } else {
+            cx.editor.set_status(format!(
+                "The document id specified [{selected_doc_id}] doesn't exist"
+            ));
+        }
+    } else {
+        cx.editor.set_status(format!("No document id specified, please press numbers as document id before switch to the buffer"));
+    }
+}
 fn goto_previous_buffer(cx: &mut Context) {
     goto_buffer(cx.editor, Direction::Backward, cx.count());
 }

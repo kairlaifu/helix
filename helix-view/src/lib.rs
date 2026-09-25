@@ -20,7 +20,7 @@ pub mod theme;
 pub mod tree;
 pub mod view;
 
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 
 // uses NonZeroUsize so Option<DocumentId> use a byte rather than two
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -31,7 +31,11 @@ impl Default for DocumentId {
         DocumentId(NonZeroUsize::new(1).unwrap())
     }
 }
-
+impl DocumentId {
+    pub fn has_same_num(&self, that: usize) -> bool {
+        return self.0.get() == that;
+    }
+}
 #[cfg(test)]
 impl DocumentId {
     /// Constructs a `DocumentId` with the given non-zero id, for use in tests

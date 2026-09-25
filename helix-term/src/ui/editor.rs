@@ -965,9 +965,10 @@ impl EditorView {
                     .and_then(|s| s.to_str())
                     .unwrap_or("scratch");
 
+                let doc_id = doc.id();
                 let modified = if doc.is_modified() { "[+]" } else { "" };
-                let label = format!(" {filename}{modified} ");
-                (label, doc.id() == current_doc)
+                let label = format!(" {doc_id}~{filename}{modified} ");
+                (label, doc_id == current_doc)
             })
             .collect();
 

@@ -52,6 +52,7 @@ pub fn default() -> HashMap<Mode, KeyTrie> {
             "t" => goto_window_top,
             "c" => goto_window_center,
             "b" => goto_window_bottom,
+            "u" => goto_specific_buffer,
             "a" => goto_last_accessed_file,
             "m" => goto_last_modified_file,
             "n" => goto_next_buffer,
