@@ -932,12 +932,12 @@ fn goto_specific_buffer(cx: &mut Context) {
         if let Some(doc_id) = target_doc_id {
             cx.editor.switch(*doc_id, Action::Replace);
         } else {
-            cx.editor.set_status(format!(
+            cx.editor.set_error(format!(
                 "The document id specified [{selected_doc_id}] doesn't exist"
             ));
         }
     } else {
-        cx.editor.set_status(format!("No document id specified, please press numbers as document id before switch to the buffer"));
+        cx.editor.set_error(format!("No document id specified, please press numbers as document id before switch to the buffer"));
     }
 }
 fn goto_previous_buffer(cx: &mut Context) {

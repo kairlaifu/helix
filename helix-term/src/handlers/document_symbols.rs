@@ -98,7 +98,7 @@ fn request_document_symbols(editor: &mut Editor, doc_id: DocumentId) {
 mod tests {
     use super::flat_symbols_to_nested;
     use helix_lsp::lsp::{Location, Position, Range, SymbolInformation, SymbolKind};
-    use url::Url;
+    use helix_lsp::Url;
 
     #[test]
     fn flat_symbols_are_nested_by_range() {
