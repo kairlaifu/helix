@@ -14,6 +14,7 @@ use helix_vcs::{FileChange, Hunk};
 use helix_view::document::LineBlameError;
 pub use lsp::*;
 pub use syntax::*;
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tui::{
     text::{Span, Spans},
     widgets::Cell,
@@ -26,7 +27,8 @@ use helix_core::{
     command_line::{self, Args},
     comment,
     doc_formatter::TextFormat,
-    encoding, find_workspace,
+    encoding::{self},
+    find_workspace,
     graphemes::{self, next_grapheme_boundary},
     history::UndoKind,
     increment,
@@ -7035,6 +7037,25 @@ async fn shell_impl_async(
     use tokio::process::Command;
     ensure!(!shell.is_empty(), "No shell set");
 
+    async fn read_stream(out: impl AsyncRead + Unpin) -> std::io::Result<Vec<u8>> {
+        let mut reader = BufReader::new(out);
+        let mut output = Vec::new();
+        let mut line = Vec::new();
+
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line).await? == 0 {
+                break;
+            }
+            output.extend_from_slice(&line);
+            let line_str = String::from_utf8_lossy(&line).to_string();
+            if !line_str.is_empty() {
+                job::dispatch(move |editor, _| editor.set_status(line_str)).await;
+            }
+        }
+        Ok(output)
+    }
+
     let mut process = Command::new(&shell[0]);
     process
         .args(&shell[1..])
@@ -7042,7 +7063,9 @@ async fn shell_impl_async(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if input.is_some() || cfg!(windows) {
+    if input.is_some()
+    /*|| cfg!(windows)*/
+    {
         process.stdin(Stdio::piped());
     } else {
         process.stdin(Stdio::null());
@@ -7055,7 +7078,9 @@ async fn shell_impl_async(
             return Err(e.into());
         }
     };
-    let output = if let Some(mut stdin) = process.stdin.take() {
+    if let Some(mut stdin) = process.stdin.take() {
+        log::debug!("process command run with stdin async:{cmd}");
+
         let input_task = tokio::spawn(async move {
             if let Some(input) = input {
                 helix_view::document::to_writer(&mut stdin, (encoding::UTF_8, false), &input)
@@ -7067,30 +7092,47 @@ async fn shell_impl_async(
             process.wait_with_output(),
             input_task,
         };
-        output?
-    } else {
-        // Process has no stdin, so we just take the output
-        process.wait_with_output().await?
-    };
-
-    let output = if !output.status.success() {
-        if output.stderr.is_empty() {
-            match output.status.code() {
-                Some(exit_code) => bail!("Shell command failed: status {}", exit_code),
-                None => bail!("Shell command failed"),
+        let output = output?;
+        let output = if !output.status.success() {
+            if output.stderr.is_empty() {
+                match output.status.code() {
+                    Some(exit_code) => bail!("Shell command failed: status {}", exit_code),
+                    None => bail!("Shell command failed"),
+                }
             }
-        }
-        String::from_utf8_lossy(&output.stderr)
-        // Prioritize `stderr` output over `stdout`
-    } else if !output.stderr.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        log::debug!("Command printed to stderr: {stderr}");
-        stderr
-    } else {
-        String::from_utf8_lossy(&output.stdout)
-    };
+            String::from_utf8_lossy(&output.stderr)
+            // Prioritize `stderr` output over `stdout`
+        } else if !output.stderr.is_empty() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            log::debug!("Command printed to stderr: {stderr}");
+            stderr
+        } else {
+            String::from_utf8_lossy(&output.stdout)
+        };
 
-    Ok(Tendril::from(output))
+        Ok(Tendril::from(output))
+    } else {
+        log::debug!("process command run with no stdin sync:{cmd}");
+        drop(process.stdin.take());
+        let stdout = process.stdout.take().expect("stdout should be piped");
+        let stderr = process.stderr.take().expect("stderr should be piped");
+        let (status, stdout, stderr) =
+            tokio::join!(process.wait(), read_stream(stdout), read_stream(stderr));
+        let (status, stdout, stderr) = (status?, stdout?, stderr?);
+        let output_all = if status.success() {
+            if stderr.is_empty() {
+                String::from_utf8_lossy(&stdout)
+            } else {
+                String::from_utf8_lossy(&stderr)
+            }
+        } else {
+            match status.code() {
+                Some(exit_code) => bail!("Command {cmd} execution failed with status {exit_code}"),
+                None => bail!("Command {cmd} execution just failed"),
+            }
+        };
+        Ok(Tendril::from(output_all))
+    }
 }
 
 fn shell(cx: &mut compositor::Context, cmd: &str, behavior: &ShellBehavior) {
