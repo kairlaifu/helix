@@ -44,6 +44,7 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
   - Display document id number in bufferline labels as prefix, the format is <document id>~<file name>, this is not configurable.
   - Command "<number> + g + u" to go to the specific buffer directly according to the input number as document id. if the number is not input, or there is no document with the
       specified document id then an error will be displayed at status line
+  - Output from a command execution now instantly displayed on status panel.
      
 # Features
 

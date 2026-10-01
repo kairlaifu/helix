@@ -1686,6 +1686,7 @@ dependencies = [
  "bitflags",
  "dunce",
  "etcetera",
+ "once_cell",
  "percent-encoding",
  "regex-automata",
  "regex-cursor",
