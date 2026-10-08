@@ -7118,13 +7118,10 @@ async fn shell_impl_async(
         let stderr = process.stderr.take().expect("stderr should be piped");
         let (status, stdout, stderr) =
             tokio::join!(process.wait(), read_stream(stdout), read_stream(stderr));
-        let (status, stdout, stderr) = (status?, stdout?, stderr?);
+        let (status, mut stdout, stderr) = (status?, stdout?, stderr?);
         let output_all = if status.success() {
-            if stderr.is_empty() {
-                String::from_utf8_lossy(&stdout)
-            } else {
-                String::from_utf8_lossy(&stderr)
-            }
+            stdout.extend_from_slice(&stderr);
+            String::from_utf8_lossy(&stdout)
         } else {
             match status.code() {
                 Some(exit_code) => bail!("Command {cmd} execution failed with status {exit_code}"),
