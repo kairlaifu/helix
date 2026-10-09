@@ -3777,29 +3777,38 @@ fn jumplist_picker(cx: &mut Context) {
     });
     cx.push_layer(Box::new(overlaid(picker)));
 }
-
+pub struct FileChangeData {
+    cwd: PathBuf,
+    style_untracked: Style,
+    style_modified: Style,
+    style_conflict: Style,
+    style_deleted: Style,
+    style_renamed: Style,
+}
 fn changed_file_picker(cx: &mut Context) {
-    pub struct FileChangeData {
-        cwd: PathBuf,
-        style_untracked: Style,
-        style_modified: Style,
-        style_conflict: Style,
-        style_deleted: Style,
-        style_renamed: Style,
+    if let Some(picker) = new_changed_file_picker(cx.editor, None) {
+        cx.push_layer(Box::new(overlaid(picker)));
     }
-
+}
+fn new_changed_file_picker(
+    editor: &mut Editor,
+    rev_or_branch: Option<String>,
+) -> Option<Picker<FileChange, FileChangeData>> {
     let cwd = helix_stdx::env::current_working_dir();
     if !cwd.exists() {
-        cx.editor
-            .set_error("Current working directory does not exist");
-        return;
+        editor.set_error("Current working directory does not exist");
+        return None;
     }
 
-    let added = cx.editor.theme.get("diff.plus");
-    let modified = cx.editor.theme.get("diff.delta");
-    let conflict = cx.editor.theme.get("diff.delta.conflict");
-    let deleted = cx.editor.theme.get("diff.minus");
-    let renamed = cx.editor.theme.get("diff.delta.moved");
+    let branch_to_compare = rev_or_branch.unwrap_or("HEAD".to_string());
+
+    editor.set_status(format!("Comparing with {branch_to_compare}"));
+
+    let added = editor.theme.get("diff.plus");
+    let modified = editor.theme.get("diff.delta");
+    let conflict = editor.theme.get("diff.delta.conflict");
+    let deleted = editor.theme.get("diff.minus");
+    let renamed = editor.theme.get("diff.delta.moved");
 
     let columns = [
         PickerColumn::new("change", |change: &FileChange, data: &FileChangeData| {
@@ -3859,25 +3868,25 @@ fn changed_file_picker(cx: &mut Context) {
     .with_preview(|_editor, meta| Some((meta.path().into(), None)));
     let injector = picker.injector();
 
-    let trust_full = cx
-        .editor
+    let trust_full = editor
         .workspace_trust
         .query(
             &helix_loader::find_workspace_in(&cwd).0,
             helix_loader::workspace_trust::TrustQuery::Git,
         )
         .is_trusted();
-    cx.editor
-        .diff_providers
-        .clone()
-        .for_each_changed_file(cwd, trust_full, move |change| match change {
+    editor.diff_providers.clone().for_each_changed_file(
+        cwd,
+        trust_full,
+        move |change| match change {
             Ok(change) => injector.push(change).is_ok(),
             Err(err) => {
                 status::report_blocking(err);
                 true
             }
-        });
-    cx.push_layer(Box::new(overlaid(picker)));
+        },
+    );
+    Some(picker)
 }
 
 pub fn command_palette(cx: &mut Context) {

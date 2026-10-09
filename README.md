@@ -41,10 +41,10 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
   - [feat: add fuzzy matching and preview highlights to global search](https://github.com/helix-editor/helix/pull/15285)
   - [feat: add breadcrumb navigation bar](https://github.com/helix-editor/helix/pull/15573)
 - The following are implemented by me
-  - Display document id number in bufferline labels as prefix, the format is <document id>~<file name>, this is not configurable.
-  - Command "<number> + g + u" to go to the specific buffer directly according to the input number as document id. if the number is not input, or there is no document with the
-      specified document id then an error will be displayed at status line
+  - Display document id number in bufferline labels as prefix, the format is &lt;document id&gt;~&lt;file name&gt;, this is not configurable.
+  - Command "&lt;number&gt; + g + u" to go to the specific buffer directly according to the input number as document id. if the number is not input, or there is no document with the specified document id then an error will be displayed at status line
   - Output from a command execution now are instantly displayed on status panel. When the execution is completed, the output from both standard output and standard error will be displayed in a new buffer instead of a popup window.
+  - Breadcrumb based on tree-sitter is implemented on top of PR [feat: add breadcrumb navigation bar](https://github.com/helix-editor/helix/pull/15573), if lsp is available the breadcrumb data will be extracted from lsp, otherwise it falls back to tree-sitter
      
 # Features
 

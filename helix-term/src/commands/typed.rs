@@ -349,7 +349,28 @@ fn force_buffer_close_all(
     let document_ids = buffer_gather_all_impl(cx.editor);
     buffer_close_by_ids_impl(cx, &document_ids, true)
 }
-
+fn changed_file_picker_typable(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let rev_or_branch = args.get(0).map(|str| str.to_string());
+    let callback = async move {
+        let call: job::Callback = Callback::EditorCompositor(Box::new(
+            move |editor: &mut Editor, compositor: &mut Compositor| {
+                if let Some(picker) = new_changed_file_picker(editor, rev_or_branch) {
+                    compositor.push(Box::new(overlaid(picker)))
+                }
+            },
+        ));
+        Ok(call)
+    };
+    cx.jobs.callback(callback);
+    Ok(())
+}
 fn buffer_next(
     cx: &mut compositor::Context,
     _args: Args,
@@ -3399,6 +3420,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (0, Some(0)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "changed_files_picker",
+        aliases: &["cfp"],
+        doc: "Open file picker which has all changed files.",
+        fun: changed_file_picker_typable,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (1, Some(1)),
             ..Signature::DEFAULT
         },
     },

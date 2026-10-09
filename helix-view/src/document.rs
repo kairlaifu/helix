@@ -13,7 +13,7 @@ use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
 use helix_core::text_annotations::{InlineAnnotation, Overlay};
 use helix_event::TaskController;
-use helix_lsp::lsp::DocumentSymbol;
+use helix_lsp::lsp::{DocumentSymbol, SymbolKind};
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
 use helix_vcs::{DiffHandle, DiffProviderRegistry};
@@ -327,7 +327,15 @@ impl From<&ThinDocumentSymbol> for Crumb {
         }
     }
 }
-
+impl From<(String, lsp::SymbolKind)> for Crumb {
+    #[inline]
+    fn from((name, kind): (String, SymbolKind)) -> Self {
+        Self {
+            name: name.into_boxed_str(),
+            kind: kind,
+        }
+    }
+}
 #[derive(Debug, Clone, Default)]
 pub struct DocumentColorSwatches {
     pub color_swatches: Vec<InlineAnnotation>,
@@ -2674,29 +2682,100 @@ impl Document {
             true
         }
 
-        let Some(symbols) = self.symbols.as_ref() else {
-            return;
-        };
+        let syntax_opt = self.syntax();
+        let symbols_opt = self.symbols.as_ref();
 
-        let position = self.position(view_id, symbols.offset_encoding);
+        let has_symbols = symbols_opt.is_some();
+        let has_syntax = syntax_opt.is_some();
+        if has_symbols {
+            log::debug!("update breadcrumbs using lsp symbols");
+            let symbols = symbols_opt.unwrap();
+            let position = self.position(view_id, symbols.offset_encoding);
 
-        let breadcrumb = {
+            let mut current = symbols.tree.as_slice();
+            let breadcrumb = {
+                let breadcrumb = self.breadcrumbs.entry(view_id).or_default();
+                breadcrumb.clear();
+                breadcrumb
+            };
+
+            while let Some(symbol) = current
+                .iter()
+                .find(|&symbol| in_range(position, symbol.range))
+            {
+                breadcrumb.push(Crumb::from(symbol));
+                match symbol.children.as_deref() {
+                    Some(children) => current = children,
+                    _ => break,
+                }
+            }
+        } else if has_syntax {
+            log::debug!("update breadcrumbs using tree-sitter syntax");
+            let text = self.text();
+            let syntax_loader = self.syn_loader.load();
+            let mut tags = syntax_opt.unwrap().tags(text.slice(..), &syntax_loader, ..);
+            let Some(selection) = self.selections.get(&view_id) else {
+                return;
+            };
+            let cursor = selection.primary().cursor(text.slice(..));
+            let byte_offset = text.char_to_byte(cursor) as u32;
+            let mut nodes = Vec::new();
+
+            let definition_str = "definition.";
+            while let Some(event) = tags.next() {
+                let syntax::QueryMatchIterEvent::Match(mat) = event else {
+                    continue;
+                };
+
+                let Some(tag_obtained) = syntax_loader.tag_query(tags.current_language()) else {
+                    continue;
+                };
+                let query = &tag_obtained.query;
+                let name = query.get_capture("name");
+                let mut def_range = None;
+                let mut name_range = None;
+                let mut def_kind = None;
+
+                for captured in &mat.nodes {
+                    let captured_name = query.capture_name(captured.capture);
+                    if captured_name.starts_with(definition_str) {
+                        // if let Some(kind_str) = captured_name.strip_prefix("definition.") {
+                        def_range = Some(captured.node.byte_range());
+                        if let Some(kind_str) = captured_name.strip_prefix(definition_str) {
+                            def_kind = Some(lsp::SymbolKind::from(kind_str.to_string()));
+                        }
+                    } else if name == Some(captured.capture) {
+                        name_range = Some(captured.node.byte_range());
+                    }
+                }
+                let (Some(def_range), Some(def_kind)) = (def_range, def_kind) else {
+                    continue;
+                };
+                if byte_offset < def_range.start || byte_offset > def_range.end {
+                    continue;
+                }
+                let start = def_range.start;
+                let end = def_range.end;
+                let name_range = name_range.unwrap_or(def_range);
+                let name = text
+                    .byte_slice(name_range.start as usize..name_range.end as usize)
+                    .to_string();
+                nodes.push((start, end, name, def_kind));
+            }
+            nodes.sort_by_key(|(start, end, _, _)| (*start, std::cmp::Reverse(*end)));
+            std::mem::drop(tags);
+            let breadcrumb = {
+                let breadcrumb = self.breadcrumbs.entry(view_id).or_default();
+                breadcrumb.clear();
+                breadcrumb
+            };
+
+            for (_, _, name, kind) in nodes {
+                breadcrumb.push(Crumb::from((name, kind)));
+            }
+        } else {
             let breadcrumb = self.breadcrumbs.entry(view_id).or_default();
             breadcrumb.clear();
-            breadcrumb
-        };
-
-        let mut current = symbols.tree.as_slice();
-
-        while let Some(symbol) = current
-            .iter()
-            .find(|&symbol| in_range(position, symbol.range))
-        {
-            breadcrumb.push(Crumb::from(symbol));
-            match symbol.children.as_deref() {
-                Some(children) => current = children,
-                _ => break,
-            }
         }
     }
 

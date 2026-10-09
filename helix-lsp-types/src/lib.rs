@@ -1278,7 +1278,23 @@ impl SymbolKind {
         (1..=26).map(Self).collect()
     }
 }
-
+impl From<String> for SymbolKind {
+    fn from(value: String) -> Self {
+        match value.as_str() {
+            "class" => Self::CLASS,
+            "constant" => Self::CONSTANT,
+            "enum" => Self::ENUM,
+            "field" => Self::FIELD,
+            "function" | "macro" => Self::FUNCTION,
+            "interface" => Self::INTERFACE,
+            "module" => Self::MODULE,
+            "selection" => Self::NAMESPACE,
+            "struct" => Self::STRUCT,
+            "type" => Self::CLASS,
+            _ => Self::NULL,
+        }
+    }
+}
 /// Specific capabilities for the `SymbolKind` in the `workspace/symbol` request.
 #[derive(Debug, Eq, PartialEq, Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
