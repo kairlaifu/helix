@@ -131,6 +131,7 @@ where
 {
     match element_id {
         helix_view::editor::StatusLineElement::Mode => render_mode,
+        helix_view::editor::StatusLineElement::LanguageServerName => render_lsp_name,
         helix_view::editor::StatusLineElement::Spinner => render_lsp_spinner,
         helix_view::editor::StatusLineElement::FileBaseName => render_file_base_name,
         helix_view::editor::StatusLineElement::FileName => render_file_name,
@@ -191,6 +192,20 @@ where
     write(context, Span::styled(content, style));
 }
 
+fn render_lsp_name<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let name: Vec<&str> = context
+        .doc
+        .language_servers()
+        .map(|svc| svc.name())
+        .collect();
+    write(
+        context,
+        Span::styled(format!("LSP[{}]", name.join(",")), Style::default()),
+    );
+}
 fn render_lsp_spinner<'a, F>(context: &mut RenderContext<'a>, write: F)
 where
     F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,

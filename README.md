@@ -32,7 +32,7 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
 # About This Fork
 
 - This fork will be synchronized with the main branch of the source frequently
-- This fork might be unstable.
+- This fork might be unstable. I use AI to inspect the code, and I don't use it for implementation or test in any way.
 - The following pull requests authored by some kind contributors have been merged to this fork, which might not be included in upstream project 
   - [feat: Inline Git Blame](https://github.com/helix-editor/helix/pull/13133)
   - [File Explorer: create/delete/copy/move/rename](https://github.com/helix-editor/helix/pull/12902)
@@ -45,6 +45,12 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
   - Command "&lt;number&gt; + g + u" to go to the specific buffer directly according to the input number as document id. if the number is not input, or there is no document with the specified document id then an error will be displayed at status line
   - Output from a command execution now are instantly displayed on status panel. When the execution is completed, the output from both standard output and standard error will be displayed in a new buffer instead of a popup window.
   - Breadcrumb based on tree-sitter is implemented on top of PR [feat: add breadcrumb navigation bar](https://github.com/helix-editor/helix/pull/15573), if lsp is available the breadcrumb data will be extracted from lsp, otherwise it falls back to tree-sitter
+  - Display LSP name on the left of status line. Add configuration of "language-server-name" in config.toml to display the attached active lsp server name to the left of status line. e.g.  
+  ```
+  [editor.statusline]
+  left = ["mode", "register","spacer", "language-server-name","spacer","spinner", "file-encoding",  "read-only-indicator", "file-name", "file-modification-indicator"]
+  '''
+
      
 # Features
 

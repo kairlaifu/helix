@@ -749,6 +749,7 @@ impl Default for StatusLineConfig {
         Self {
             left: vec![
                 E::Mode,
+                E::LanguageServerName,
                 E::Spinner,
                 E::FileName,
                 E::ReadOnlyIndicator,
@@ -862,6 +863,7 @@ pub enum StatusLineElement {
 
     /// Indicator for when code actions are available
     CodeActionHint,
+    LanguageServerName,
 }
 
 // Cursor shape is read and used on every rendered frame and so needs

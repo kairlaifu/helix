@@ -160,6 +160,7 @@ The following statusline elements can be configured:
 | Key    | Description |
 | ------ | ----------- |
 | `mode` | The current editor mode (`mode.normal`/`mode.insert`/`mode.select`) |
+| `language-server-name` | LSP name active for current document |
 | `spinner` | A progress spinner indicating LSP activity |
 | `file-name` | The path/name of the opened file |
 | `file-absolute-path` | The absolute path/name of the opened file |
