@@ -3799,11 +3799,6 @@ fn new_changed_file_picker(
         editor.set_error("Current working directory does not exist");
         return None;
     }
-
-    let branch_to_compare = rev_or_branch.unwrap_or("HEAD".to_string());
-
-    editor.set_status(format!("Comparing with {branch_to_compare}"));
-
     let added = editor.theme.get("diff.plus");
     let modified = editor.theme.get("diff.delta");
     let conflict = editor.theme.get("diff.delta.conflict");
@@ -3875,13 +3870,16 @@ fn new_changed_file_picker(
             helix_loader::workspace_trust::TrustQuery::Git,
         )
         .is_trusted();
+
     editor.diff_providers.clone().for_each_changed_file(
         cwd,
         trust_full,
+        rev_or_branch,
         move |change| match change {
             Ok(change) => injector.push(change).is_ok(),
             Err(err) => {
-                status::report_blocking(err);
+                // status::report_blocking(err);
+                log::error!("Fail at identify changed files: {err}");
                 true
             }
         },

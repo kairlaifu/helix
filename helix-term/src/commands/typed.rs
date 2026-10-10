@@ -357,7 +357,7 @@ fn changed_file_picker_typable(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-    let rev_or_branch = args.get(0).map(|str| str.to_string());
+    let rev_or_branch = args.get(0).map(|s| s.to_string());
     let callback = async move {
         let call: job::Callback = Callback::EditorCompositor(Box::new(
             move |editor: &mut Editor, compositor: &mut Compositor| {

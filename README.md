@@ -49,8 +49,8 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
   ```
   [editor.statusline]
   left = ["mode", "register","spacer", "language-server-name","spacer","spinner", "file-encoding",  "read-only-indicator", "file-name", "file-modification-indicator"]
-  '''
-
+  ```
+  - Add typable command changed_files_picker which takes input of a revision or branch to popup pick displaying what changes have been changed between local work directory and the specified commit or branch.
      
 # Features
 

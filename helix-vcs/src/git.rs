@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use arc_swap::ArcSwap;
 use gix::filter::plumbing::driver::apply::Delay;
 use std::io::Read;
@@ -90,11 +90,39 @@ pub fn get_current_head_name(file: &Path, trust_full: bool) -> Result<Arc<ArcSwa
 pub fn for_each_changed_file(
     cwd: &Path,
     trust_full: bool,
+    rev_or_branch: Option<&str>,
     f: impl Fn(Result<FileChange>) -> bool,
 ) -> Result<()> {
-    status(&open_repo(cwd, trust_full)?.to_thread_local(), f)
-}
+    let repo = open_repo(cwd, trust_full)?.to_thread_local();
+    let index_opt = if rev_or_branch.is_some() {
+        let tree = repo
+            .rev_parse_single(rev_or_branch.unwrap())
+            .with_context(|| {
+                let msg = format!(
+                    "Fail to resolve supplied revision or branch {}",
+                    rev_or_branch.unwrap()
+                );
+                helix_event::status::report_blocking(anyhow!(msg.clone()));
+                msg
+            })?
+            .object()?
+            .peel_to_tree()
+            .with_context(|| {
+                let msg = format!(
+                    "Supplied revision or branch {} doesn't resolve to a tree",
+                    rev_or_branch.unwrap()
+                );
+                helix_event::status::report_blocking(anyhow!(msg.clone()));
+                msg
+            })?;
+        let index = repo.index_from_tree(tree.id.as_ref())?;
+        Some(gix::worktree::IndexPersistedOrInMemory::InMemory(index))
+    } else {
+        None
+    };
 
+    status(&repo, index_opt, f)
+}
 fn open_repo(path: &Path, trust_full: bool) -> Result<ThreadSafeRepository> {
     // `trust_full` is the workspace-trust decision made by the caller, and it must be the
     // authority on the gix trust level. gix's own discovery (`discover_*`) ignores a
@@ -147,13 +175,17 @@ fn open_repo(path: &Path, trust_full: bool) -> Result<ThreadSafeRepository> {
 }
 
 /// Emulates the result of running `git status` from the command line.
-fn status(repo: &Repository, f: impl Fn(Result<FileChange>) -> bool) -> Result<()> {
+fn status(
+    repo: &Repository,
+    index: Option<gix::worktree::IndexPersistedOrInMemory>,
+    f: impl Fn(Result<FileChange>) -> bool,
+) -> Result<()> {
     let work_dir = repo
         .workdir()
         .ok_or_else(|| anyhow::anyhow!("working tree not found"))?
         .to_path_buf();
 
-    let status_platform = repo
+    let mut status_platform = repo
         .status(gix::progress::Discard)?
         // Here we discard the `status.showUntrackedFiles` config, as it makes little sense in
         // our case to not list new (untracked) files. We could have respected this config
@@ -168,6 +200,9 @@ fn status(repo: &Repository, f: impl Fn(Result<FileChange>) -> bool) -> Result<(
             ..Default::default()
         }));
 
+    if let Some(index) = index {
+        status_platform = status_platform.index(index);
+    }
     // No filtering based on path
     let empty_patterns = vec![];
 

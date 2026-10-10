@@ -68,13 +68,23 @@ impl DiffProviderRegistry {
         self,
         cwd: PathBuf,
         trust_full: bool,
+        rev_or_branch_to_compare: Option<String>,
         f: impl Fn(Result<FileChange>) -> bool + Send + 'static,
     ) {
         tokio::task::spawn_blocking(move || {
             if self
                 .providers
                 .iter()
-                .find_map(|provider| provider.for_each_changed_file(&cwd, trust_full, &f).ok())
+                .find_map(|provider| {
+                    provider
+                        .for_each_changed_file(
+                            &cwd,
+                            trust_full,
+                            rev_or_branch_to_compare.as_deref(),
+                            &f,
+                        )
+                        .ok()
+                })
                 .is_none()
             {
                 f(Err(anyhow!("no diff provider returns success")));
@@ -132,11 +142,12 @@ impl DiffProvider {
         &self,
         cwd: &Path,
         trust_full: bool,
+        rev_or_branch_to_compare: Option<&str>,
         f: impl Fn(Result<FileChange>) -> bool,
     ) -> Result<()> {
         match self {
             #[cfg(feature = "git")]
-            Self::Git => git::for_each_changed_file(cwd, trust_full, f),
+            Self::Git => git::for_each_changed_file(cwd, trust_full, rev_or_branch_to_compare, f),
             Self::None => bail!("No diff support compiled in"),
         }
     }
