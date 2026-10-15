@@ -29,7 +29,13 @@ fn get_repo_dir(file: &Path) -> Result<&Path> {
     file.parent().context("file has no parent directory")
 }
 
-pub fn get_diff_base(file: &Path, trust_full: bool) -> Result<Vec<u8>> {
+/// Extract content of a file at the specific revision or the last commit of a branch
+/// if @revsion_or_branch is None then get it from the current head commit
+pub fn file_at_revision_or_branch(
+    file: &Path,
+    revsion_or_branch: Option<&str>,
+    trust_full: bool,
+) -> Result<Vec<u8>> {
     debug_assert!(!file.exists() || file.is_file());
     debug_assert!(file.is_absolute());
     let file = gix::path::realpath(file).context("resolve symlinks")?;
@@ -40,7 +46,14 @@ pub fn get_diff_base(file: &Path, trust_full: bool) -> Result<Vec<u8>> {
     let repo = open_repo(repo_dir, trust_full)
         .context("failed to open git repo")?
         .to_thread_local();
-    let head = repo.head_commit()?;
+    let head = match revsion_or_branch {
+        Some(rev_or_branch) => repo
+            .rev_parse_single(rev_or_branch)?
+            .object()?
+            .peel_to_commit()?,
+        _ => repo.head_commit()?,
+    };
+
     let file_oid = find_file_in_commit(&repo, &head, &file)?;
 
     let file_object = repo.find_object(file_oid)?;

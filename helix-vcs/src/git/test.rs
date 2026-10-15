@@ -58,7 +58,7 @@ fn missing_file() {
     let file = temp_git.path().join("file.txt");
     File::create(&file).unwrap().write_all(b"foo").unwrap();
 
-    assert!(git::get_diff_base(&file, true).is_err());
+    assert!(git::file_at_revision_or_branch(&file, None, true).is_err());
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn unmodified_file() {
     File::create(&file).unwrap().write_all(contents).unwrap();
     create_commit(temp_git.path(), true);
     assert_eq!(
-        git::get_diff_base(&file, true).unwrap(),
+        git::file_at_revision_or_branch(&file, None, true).unwrap(),
         Vec::from(contents)
     );
 }
@@ -84,7 +84,7 @@ fn modified_file() {
     File::create(&file).unwrap().write_all(b"bar").unwrap();
 
     assert_eq!(
-        git::get_diff_base(&file, true).unwrap(),
+        git::file_at_revision_or_branch(&file, None, true).unwrap(),
         Vec::from(contents)
     );
 }
@@ -105,7 +105,7 @@ fn directory() {
 
     std::fs::remove_dir_all(&dir).unwrap();
     File::create(&dir).unwrap().write_all(b"bar").unwrap();
-    assert!(git::get_diff_base(&dir, true).is_err());
+    assert!(git::file_at_revision_or_branch(&dir, None, true).is_err());
 }
 
 /// Test that `get_diff_base` resolves symlinks so that the same diff base is
@@ -132,8 +132,14 @@ fn symlink() {
     symlink("file.txt", &file_link).unwrap();
     create_commit(temp_git.path(), true);
 
-    assert_eq!(git::get_diff_base(&file_link, true).unwrap(), contents);
-    assert_eq!(git::get_diff_base(&file, true).unwrap(), contents);
+    assert_eq!(
+        git::file_at_revision_or_branch(&file_link, None, true).unwrap(),
+        contents
+    );
+    assert_eq!(
+        git::file_at_revision_or_branch(&file, None, true).unwrap(),
+        contents
+    );
 }
 
 /// Test that `get_diff_base` returns content when the file is a symlink to
@@ -157,6 +163,12 @@ fn symlink_to_git_repo() {
     let file_link = temp_dir.path().join("file_link.txt");
     symlink(&file, &file_link).unwrap();
 
-    assert_eq!(git::get_diff_base(&file_link, true).unwrap(), contents);
-    assert_eq!(git::get_diff_base(&file, true).unwrap(), contents);
+    assert_eq!(
+        git::file_at_revision_or_branch(&file_link, None, true).unwrap(),
+        contents
+    );
+    assert_eq!(
+        git::file_at_revision_or_branch(&file, None, true).unwrap(),
+        contents
+    );
 }

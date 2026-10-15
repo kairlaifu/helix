@@ -6,12 +6,13 @@ pub(crate) mod typed;
 pub use dap::*;
 use futures_util::FutureExt;
 use helix_event::status;
+use helix_loader::workspace_trust::TrustQuery;
 use helix_stdx::{
     path::{self, find_paths},
     rope::{self, RopeSliceExt},
 };
 use helix_vcs::{FileChange, Hunk};
-use helix_view::document::LineBlameError;
+use helix_view::{diff_session::DiffSessionViewId, document::LineBlameError};
 pub use lsp::*;
 pub use syntax::*;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
@@ -30,6 +31,7 @@ use helix_core::{
     encoding::{self},
     find_workspace,
     graphemes::{self, next_grapheme_boundary},
+    hashmap,
     history::UndoKind,
     increment,
     indent::{self, IndentStyle},
@@ -67,10 +69,14 @@ use insert::*;
 use movement::Movement;
 
 use crate::{
+    alt,
     compositor::{self, Component, Compositor},
     filter_picker_entry,
     job::Callback,
-    ui::{self, overlay::overlaid, Picker, PickerColumn, Popup, Prompt, PromptEvent},
+    ui::{
+        self, overlay::overlaid, picker::PickerKeyHandler, Picker, PickerColumn, Popup, Prompt,
+        PromptEvent,
+    },
 };
 
 use crate::job::{self, Jobs};
@@ -422,7 +428,7 @@ impl MappableCommand {
         symbol_picker, "Open symbol picker",
         syntax_symbol_picker, "Open symbol picker from syntax information",
         lsp_or_syntax_symbol_picker, "Open symbol picker from LSP or syntax information",
-        changed_file_picker, "Open changed file picker",
+        list_changed_files, "Open changed file picker",
         select_references_to_symbol_under_cursor, "Select symbol references",
         workspace_symbol_picker, "Open workspace symbol picker",
         syntax_workspace_symbol_picker, "Open workspace symbol picker from syntax information",
@@ -3779,13 +3785,14 @@ fn jumplist_picker(cx: &mut Context) {
 }
 pub struct FileChangeData {
     cwd: PathBuf,
+    revision: Option<String>,
     style_untracked: Style,
     style_modified: Style,
     style_conflict: Style,
     style_deleted: Style,
     style_renamed: Style,
 }
-fn changed_file_picker(cx: &mut Context) {
+fn list_changed_files(cx: &mut Context) {
     if let Some(picker) = new_changed_file_picker(cx.editor, None) {
         cx.push_layer(Box::new(overlaid(picker)));
     }
@@ -3805,6 +3812,87 @@ fn new_changed_file_picker(
     let deleted = editor.theme.get("diff.minus");
     let renamed = editor.theme.get("diff.delta.moved");
 
+    let diff_open_handler: PickerKeyHandler<FileChange, FileChangeData> =
+        Box::new(|cx, change, m, _| {
+            let path = change.path().display().to_string();
+            let path_ex = Path::new(path.as_str());
+            let doc_id = cx.editor.new_file(Action::Replace);
+            let view_id = view!(cx.editor).id;
+            let (view, doc) = (view_mut!(cx.editor, view_id), doc_mut!(cx.editor, &doc_id));
+            let trust_full = cx
+                .editor
+                .workspace_trust
+                .query(doc.workspace_root(), TrustQuery::Git)
+                .is_trusted();
+            let revision = m.revision.as_deref();
+            let content_prev_rev_raw = cx
+                .editor
+                .diff_providers
+                .clone()
+                .file_at_revision_or_branch(trust_full, revision, path_ex)
+                .unwrap_or(vec![]);
+            let content_at_prev_revision = String::from_utf8_lossy(&content_prev_rev_raw);
+
+            doc.ensure_view_init(view_id);
+            let transient_view_id = DiffSessionViewId::Transient(view_id);
+
+            let transaction = Transaction::insert(
+                doc.text(),
+                &Selection::point(0),
+                content_at_prev_revision.into(),
+            )
+            .with_selection(Selection::point(0));
+            doc.apply(&transaction, view_id);
+            doc.append_changes_to_history(view);
+
+            cx.editor.set_doc_path(
+                doc_id,
+                Path::new(
+                    format!(
+                        "{}@{}",
+                        &&transient_view_id
+                            .file_path(revision.unwrap_or("HEAD"))
+                            .as_str(),
+                        path_ex
+                            .file_name()
+                            .and_then(|ext| ext.to_str())
+                            .unwrap_or("unknown")
+                    )
+                    .as_str(),
+                ),
+            );
+
+            if let Some(id_view_to_close) = cx.editor.close_diff_transient_docs(view_id) {
+                cx.editor.close(id_view_to_close);
+            }
+            if let Err(err) = typed::diff_this_view(cx, transient_view_id) {
+                log::error!("{err}");
+                return;
+            }
+            match cx
+                .editor
+                .open(Path::new(path.as_str()), Action::VerticalSplit)
+            {
+                Err(e) => {
+                    let err = if let Some(err) = e.source() {
+                        format!("{}", err)
+                    } else {
+                        format!("unable to open \"{}\"", path)
+                    };
+                    cx.editor.set_error(err);
+                }
+                Ok(_local_doc_id) => {
+                    let local_view_id = cx.editor.tree.focus;
+                    if let Err(err) =
+                        typed::diff_this_view(cx, DiffSessionViewId::Persist(local_view_id))
+                    {
+                        log::error!("{err}");
+                        return;
+                    }
+                    // goto_next_change_impl_generic(1, cx.editor, Direction::Forward);
+                }
+            }
+        });
     let columns = [
         PickerColumn::new("change", |change: &FileChange, data: &FileChangeData| {
             match change {
@@ -3842,6 +3930,7 @@ fn new_changed_file_picker(
         [],
         FileChangeData {
             cwd: cwd.clone(),
+            revision: rev_or_branch.clone(),
             style_untracked: added,
             style_modified: modified,
             style_conflict: conflict,
@@ -3860,6 +3949,9 @@ fn new_changed_file_picker(
             }
         },
     )
+    .with_key_handlers(hashmap! {
+        alt!('f') => diff_open_handler,
+    })
     .with_preview(|_editor, meta| Some((meta.path().into(), None)));
     let injector = picker.injector();
 

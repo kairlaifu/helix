@@ -10,6 +10,7 @@ use helix_core::fuzzy::fuzzy_match;
 use helix_core::indent::MAX_INDENT;
 use helix_core::line_ending;
 use helix_stdx::path::home_dir;
+use helix_view::diff_session::DiffSessionViewId;
 use helix_view::document::{read_to_string, DEFAULT_LANGUAGE_NAME};
 use helix_view::editor::{CloseError, ConfigEvent};
 use helix_view::expansion;
@@ -67,17 +68,27 @@ impl CommandCompleter {
     }
 }
 
-fn exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+fn do_exit(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+    is_force: bool,
+) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }
 
-    if doc!(cx.editor).is_modified() {
+    let doc = doc!(cx.editor);
+    if doc.is_modified()
+        && doc.path().map_or(true, |path| {
+            !DiffSessionViewId::is_for_transient(path.to_str().unwrap())
+        })
+    {
         write_impl(
             cx,
             args.first(),
             WriteOptions {
-                force: false,
+                force: is_force,
                 auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
                 code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
             },
@@ -86,25 +97,12 @@ fn exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow:
     cx.block_try_flush_writes()?;
     quit(cx, Args::default(), event)
 }
+fn exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
+    do_exit(cx, args, event, false)
+}
 
 fn force_exit(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> anyhow::Result<()> {
-    if event != PromptEvent::Validate {
-        return Ok(());
-    }
-
-    if doc!(cx.editor).is_modified() {
-        write_impl(
-            cx,
-            args.first(),
-            WriteOptions {
-                force: true,
-                auto_format: !args.has_flag(WRITE_NO_FORMAT_FLAG.name),
-                code_actions: !args.has_flag(WRITE_NO_CODE_ACTIONS_FLAG.name),
-            },
-        )?;
-    }
-    cx.block_try_flush_writes()?;
-    quit(cx, Args::default(), event)
+    do_exit(cx, args, event, true)
 }
 
 fn quit(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> anyhow::Result<()> {
@@ -2790,10 +2788,15 @@ fn diff_open(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> an
     let rope_b = cx.editor.documents[&doc_b].text().clone();
     let ignore_whitespace = cx.editor.config().diff_ignore_whitespace;
 
-    let mut session = helix_view::diff_session::DiffSession::new(view_a, view_b, doc_a, doc_b);
+    let mut session = helix_view::diff_session::DiffSession::new(
+        DiffSessionViewId::Persist(view_a),
+        DiffSessionViewId::Persist(view_b),
+        doc_a,
+        doc_b,
+    );
     session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
 
-    cx.editor.diff_sessions.push(session);
+    cx.editor.diff_sessions = Some(session);
     cx.editor.set_status(format!(
         "Diff: {} vs {}",
         path_a.display(),
@@ -2982,13 +2985,63 @@ fn diff_off(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> an
         .diff_sessions
         .iter()
         .position(|s| s.contains_view(view_id));
-
-    let Some(idx) = idx else {
+    let Some(_) = idx else {
         bail!("Not in a diff session");
     };
-
-    cx.editor.diff_sessions.remove(idx);
+    cx.editor.close_diff_transient_docs(view_id);
+    let idx = cx
+        .editor
+        .diff_sessions
+        .iter()
+        .position(|s| s.contains_view(view_id));
+    if let Some(_) = idx {
+        cx.editor.diff_sessions = None;
+    }
     cx.editor.set_status("Diff session ended");
+    Ok(())
+}
+pub fn diff_this_view(
+    cx: &mut compositor::Context,
+    view_id: DiffSessionViewId,
+) -> anyhow::Result<()> {
+    if cx.editor.diff_session_for(*view_id.view_id()).is_some() {
+        bail!("This view is already part of a diff session. Use :diff-off first.");
+    }
+
+    if cx.editor.pending_diff_this.is_none() {
+        cx.editor.pending_diff_this = Some(view_id);
+        cx.editor
+            .set_status("Diff: marked first view. Run :diffthis in the second view.");
+        return Ok(());
+    }
+    let other_view_id = cx.editor.pending_diff_this.as_ref().unwrap();
+
+    if other_view_id == &view_id {
+        cx.editor.pending_diff_this = None;
+        cx.editor
+            .set_status("Diff: cancelled (same view selected twice).");
+        return Ok(());
+    }
+
+    let other_doc_id = cx.editor.tree.get(*other_view_id.view_id()).doc;
+    let this_doc_id = cx.editor.tree.get(*view_id.view_id()).doc;
+
+    let rope_a = cx.editor.documents[&other_doc_id].text().clone();
+    let rope_b = cx.editor.documents[&this_doc_id].text().clone();
+    let ignore_whitespace = cx.editor.config().diff_ignore_whitespace;
+
+    let view_a = if let DiffSessionViewId::Persist(id) = other_view_id {
+        DiffSessionViewId::Persist(*id)
+    } else {
+        DiffSessionViewId::Transient(*other_view_id.view_id())
+    };
+    let mut session =
+        helix_view::diff_session::DiffSession::new(view_a, view_id, other_doc_id, this_doc_id);
+    session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
+    cx.editor.diff_sessions = Some(session);
+    cx.editor.set_status("Diff session started.");
+
+    cx.editor.pending_diff_this = None;
     Ok(())
 }
 
@@ -2998,45 +3051,7 @@ fn diff_this(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
     }
 
     let view_id = cx.editor.tree.focus;
-
-    if cx.editor.diff_session_for(view_id).is_some() {
-        bail!("This view is already part of a diff session. Use :diff-off first.");
-    }
-
-    match cx.editor.pending_diff_this {
-        None => {
-            cx.editor.pending_diff_this = Some(view_id);
-            cx.editor
-                .set_status("Diff: marked first view. Run :diffthis in the second view.");
-        }
-        Some(other_view_id) if other_view_id == view_id => {
-            cx.editor.pending_diff_this = None;
-            cx.editor
-                .set_status("Diff: cancelled (same view selected twice).");
-        }
-        Some(other_view_id) => {
-            cx.editor.pending_diff_this = None;
-
-            let other_doc_id = cx.editor.tree.get(other_view_id).doc;
-            let this_doc_id = cx.editor.tree.get(view_id).doc;
-
-            let rope_a = cx.editor.documents[&other_doc_id].text().clone();
-            let rope_b = cx.editor.documents[&this_doc_id].text().clone();
-            let ignore_whitespace = cx.editor.config().diff_ignore_whitespace;
-
-            let mut session = helix_view::diff_session::DiffSession::new(
-                other_view_id,
-                view_id,
-                other_doc_id,
-                this_doc_id,
-            );
-            session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
-            cx.editor.diff_sessions.push(session);
-            cx.editor.set_status("Diff session started.");
-        }
-    }
-
-    Ok(())
+    diff_this_view(cx, DiffSessionViewId::Persist(view_id))
 }
 
 fn clear_register(
@@ -3424,9 +3439,9 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         },
     },
     TypableCommand {
-        name: "changed_files_picker",
-        aliases: &["cfp"],
-        doc: "Open file picker which has all changed files.",
+        name: "list_changed_files",
+        aliases: &["lcf"],
+        doc: "Open file picker to list all changed files comparing local with the specified revision or branch.",
         fun: changed_file_picker_typable,
         completer: CommandCompleter::none(),
         signature: Signature {

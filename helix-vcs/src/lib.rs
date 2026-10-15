@@ -32,16 +32,30 @@ impl DiffProviderRegistry {
     /// Get the given file from the VCS. This provides the unedited document as a "base"
     /// for a diff to be created.
     pub fn get_diff_base(&self, file: &Path, trust_full: bool) -> Option<Vec<u8>> {
-        self.providers
-            .iter()
-            .find_map(|provider| match provider.get_diff_base(file, trust_full) {
+        self.file_at_revision_or_branch(trust_full, None, file)
+    }
+
+    ///Extract file content from a specific revision or last commit of a branch
+    pub fn file_at_revision_or_branch(
+        &self,
+        trust_full: bool,
+        rev_or_branch: Option<&str>,
+        relative_file_path: &Path,
+    ) -> Option<Vec<u8>> {
+        self.providers.iter().find_map(|provider| {
+            match provider.file_at_revision_or_branch(rev_or_branch, relative_file_path, trust_full)
+            {
                 Ok(res) => Some(res),
                 Err(err) => {
                     log::debug!("{err:#?}");
-                    log::debug!("failed to open diff base for {}", file.display());
+                    log::debug!(
+                        "failed to open diff base for {}",
+                        relative_file_path.display()
+                    );
                     None
                 }
-            })
+            }
+        })
     }
 
     /// Get the current name of the current [HEAD](https://stackoverflow.com/questions/2304087/what-is-head-in-git).
@@ -118,14 +132,20 @@ enum DiffProvider {
 }
 
 impl DiffProvider {
-    fn get_diff_base(&self, file: &Path, trust_full: bool) -> Result<Vec<u8>> {
+    fn file_at_revision_or_branch(
+        &self,
+        rev_or_branch: Option<&str>,
+        relative_file_path: &Path,
+        trust_full: bool,
+    ) -> Result<Vec<u8>> {
         match self {
             #[cfg(feature = "git")]
-            Self::Git => git::get_diff_base(file, trust_full),
+            Self::Git => {
+                git::file_at_revision_or_branch(relative_file_path, rev_or_branch, trust_full)
+            }
             Self::None => bail!("No diff support compiled in"),
         }
     }
-
     fn get_current_head_name(
         &self,
         file: &Path,

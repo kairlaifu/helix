@@ -9,6 +9,7 @@ use helix_lsp::{
 use helix_stdx::path::get_relative_path;
 use helix_view::{
     align_view,
+    diff_session::DiffSessionViewId,
     document::{DocumentOpenError, DocumentSavedEventResult},
     editor::{ConfigEvent, EditorEvent},
     events::EditorConfigDidChange,
@@ -193,10 +194,14 @@ impl Application {
             let rope_b = editor.documents[&doc_b].text().clone();
             let ignore_whitespace = editor.config().diff_ignore_whitespace;
 
-            let mut session =
-                helix_view::diff_session::DiffSession::new(view_a, view_b, doc_a, doc_b);
+            let mut session = helix_view::diff_session::DiffSession::new(
+                DiffSessionViewId::Persist(view_a),
+                DiffSessionViewId::Persist(view_b),
+                doc_a,
+                doc_b,
+            );
             session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
-            editor.diff_sessions.push(session);
+            editor.diff_sessions = Some(session);
 
             editor.set_status(format!(
                 "Diff: {} vs {}",

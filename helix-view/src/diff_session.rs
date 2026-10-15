@@ -194,8 +194,8 @@ fn trim_inline_change_whitespace(change: InlineChange, rope: &Rope) -> Option<In
 /// scroll synchronization and alignment.
 #[derive(Debug)]
 pub struct DiffSession {
-    view_a: ViewId,
-    view_b: ViewId,
+    view_a: DiffSessionViewId,
+    view_b: DiffSessionViewId,
     doc_a: DocumentId,
     doc_b: DocumentId,
     /// Shared hunk list. Stored as Arc so callers can take a cheap reference-counted
@@ -209,9 +209,38 @@ pub struct DiffSession {
     version_a: Option<i32>,
     version_b: Option<i32>,
 }
-
+/// a ViewId wrapper used for side by side diff
+/// Transient: the view will be closed forcefully when diff session is end
+/// Persist:   the view will keep open after the diff session is terminated
+#[derive(Debug, PartialEq, Eq)]
+pub enum DiffSessionViewId {
+    Transient(ViewId),
+    Persist(ViewId),
+}
+impl DiffSessionViewId {
+    pub fn view_id(&self) -> &ViewId {
+        match self {
+            Self::Transient(id) => id,
+            Self::Persist(id) => id,
+        }
+    }
+    pub fn file_path(&self, real_path: &str) -> String {
+        match self {
+            Self::Transient(_) => format!("Transient://{}", real_path),
+            Self::Persist(_) => format!("Persist://{}", real_path),
+        }
+    }
+    pub fn is_for_transient(path_str: &str) -> bool {
+        !path_str.is_empty() && path_str.contains("Transient:")
+    }
+}
 impl DiffSession {
-    pub fn new(view_a: ViewId, view_b: ViewId, doc_a: DocumentId, doc_b: DocumentId) -> Self {
+    pub fn new(
+        view_a: DiffSessionViewId,
+        view_b: DiffSessionViewId,
+        doc_a: DocumentId,
+        doc_b: DocumentId,
+    ) -> Self {
         Self {
             view_a,
             view_b,
@@ -251,11 +280,20 @@ impl DiffSession {
     }
 
     pub fn view_a(&self) -> ViewId {
-        self.view_a
+        *self.view_a.view_id()
     }
-
+    pub fn transient_views(&self) -> Vec<ViewId> {
+        let mut res = Vec::new();
+        if let DiffSessionViewId::Transient(view_id) = self.view_a {
+            res.push(view_id);
+        }
+        if let DiffSessionViewId::Transient(view_id) = self.view_b {
+            res.push(view_id);
+        }
+        res
+    }
     pub fn view_b(&self) -> ViewId {
-        self.view_b
+        *self.view_b.view_id()
     }
 
     pub fn doc_a(&self) -> DocumentId {
@@ -286,7 +324,7 @@ impl DiffSession {
 
     /// Returns true if the given view is part of this diff session.
     pub fn contains_view(&self, view_id: ViewId) -> bool {
-        self.view_a == view_id || self.view_b == view_id
+        *self.view_a.view_id() == view_id || *self.view_b.view_id() == view_id
     }
 
     /// Returns true if the given document is part of this diff session.
@@ -327,7 +365,8 @@ impl DiffSession {
             );
             Arc::new(diff.hunks().collect())
         } else {
-            let input = InternedInput::new(RopeLines(rope_a.slice(..)), RopeLines(rope_b.slice(..)));
+            let input =
+                InternedInput::new(RopeLines(rope_a.slice(..)), RopeLines(rope_b.slice(..)));
             let mut diff = Diff::compute(Algorithm::Histogram, &input);
             diff.postprocess_with(
                 &input.before,
@@ -372,20 +411,36 @@ impl DiffSession {
 
     /// Returns the partner view ID for the given view, if it belongs to this session.
     pub fn partner_view(&self, view_id: ViewId) -> Option<ViewId> {
-        if view_id == self.view_a {
-            Some(self.view_b)
-        } else if view_id == self.view_b {
-            Some(self.view_a)
+        self.partner_view_ex(view_id).map(|v| *v.view_id())
+    }
+    pub fn contains_transient_view(&self, view_id: ViewId) -> bool {
+        let view = if view_id == *self.view_a.view_id() {
+            &self.view_a
+        } else if view_id == *self.view_b.view_id() {
+            &self.view_b
+        } else {
+            &DiffSessionViewId::Persist(view_id)
+        };
+        if let DiffSessionViewId::Transient(_id) = view {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn partner_view_ex(&self, view_id: ViewId) -> Option<&DiffSessionViewId> {
+        if view_id == *self.view_a.view_id() {
+            Some(&self.view_b)
+        } else if view_id == *self.view_b.view_id() {
+            Some(&self.view_a)
         } else {
             None
         }
     }
-
     /// Returns which side of the diff session the given view is on.
     pub fn side_for_view(&self, view_id: ViewId) -> Option<DiffSide> {
-        if view_id == self.view_a {
+        if view_id == *self.view_a.view_id() {
             Some(DiffSide::A)
-        } else if view_id == self.view_b {
+        } else if view_id == *self.view_b.view_id() {
             Some(DiffSide::B)
         } else {
             None
@@ -493,16 +548,18 @@ fn apply_offset(line: u32, offset: i64) -> u32 {
 /// authorizes the caller to write to `dest`'s selection. Returning `None`
 /// means the caller must skip - either no session pairs them, or the session
 /// has changed shape since the focus event arrived.
-pub fn paired_side(sessions: &[DiffSession], source: ViewId, dest: ViewId) -> Option<DiffSide> {
-    sessions
-        .iter()
-        .find(|s| s.contains_view(source))
-        .and_then(|s| {
-            if s.partner_view(source) != Some(dest) {
-                return None;
-            }
-            s.side_for_view(source)
-        })
+pub fn paired_side(
+    session: &Option<DiffSession>,
+    source: ViewId,
+    dest: ViewId,
+) -> Option<DiffSide> {
+    let Some(diff_session) = session else {
+        return None;
+    };
+    if diff_session.partner_view(source) != Some(dest) {
+        return None;
+    }
+    diff_session.side_for_view(source)
 }
 
 /// Returns an iterator over hunks whose range on `side` intersects any of the given line
@@ -933,7 +990,12 @@ mod tests {
         let doc_a = make_doc_id(1);
         let doc_b = make_doc_id(2);
 
-        let session = DiffSession::new(view_a, view_b, doc_a, doc_b);
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Transient(view_b),
+            doc_a,
+            doc_b,
+        );
 
         assert_eq!(session.view_a(), view_a);
         assert_eq!(session.view_b(), view_b);
@@ -944,7 +1006,12 @@ mod tests {
     #[test]
     fn contains_view_returns_true_for_session_members() {
         let (view_a, view_b) = make_view_ids();
-        let session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
 
         assert!(session.contains_view(view_a));
         assert!(session.contains_view(view_b));
@@ -957,14 +1024,24 @@ mod tests {
         let view_b = sm.insert(());
         let view_c = sm.insert(());
 
-        let session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
         assert!(!session.contains_view(view_c));
     }
 
     #[test]
     fn partner_view_returns_other_side() {
         let (view_a, view_b) = make_view_ids();
-        let session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
 
         assert_eq!(session.partner_view(view_a), Some(view_b));
         assert_eq!(session.partner_view(view_b), Some(view_a));
@@ -977,21 +1054,36 @@ mod tests {
         let view_b = sm.insert(());
         let view_c = sm.insert(());
 
-        let session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
         assert_eq!(session.partner_view(view_c), None);
     }
 
     #[test]
     fn new_session_has_no_hunks() {
         let (view_a, view_b) = make_view_ids();
-        let session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
 
         assert!(session.hunks().is_empty());
     }
 
     fn make_session() -> DiffSession {
         let (view_a, view_b) = make_view_ids();
-        DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2))
+        DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        )
     }
 
     #[test]
@@ -1429,8 +1521,13 @@ mod tests {
     #[test]
     fn paired_side_returns_source_side_when_views_are_partners() {
         let (view_a, view_b) = make_view_ids();
-        let session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
-        let sessions = vec![session];
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
+        let sessions = Some(session);
 
         // Source on side A, partner on side B: returns A.
         assert_eq!(paired_side(&sessions, view_a, view_b), Some(DiffSide::A));
@@ -1447,10 +1544,12 @@ mod tests {
         let view_c = sm.insert(());
         let view_d = sm.insert(());
 
-        let sessions = vec![
-            DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2)),
-            DiffSession::new(view_c, view_d, make_doc_id(3), make_doc_id(4)),
-        ];
+        let sessions = Some(DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        ));
 
         // view_a's partner is view_b, not view_c. Cross-session sync is denied.
         assert_eq!(paired_side(&sessions, view_a, view_c), None);
@@ -1468,12 +1567,12 @@ mod tests {
         let view_b = sm.insert(());
         let outsider = sm.insert(());
 
-        let sessions = vec![DiffSession::new(
-            view_a,
-            view_b,
+        let sessions = Some(DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
             make_doc_id(1),
             make_doc_id(2),
-        )];
+        ));
         assert_eq!(paired_side(&sessions, outsider, view_a), None);
         assert_eq!(paired_side(&sessions, outsider, view_b), None);
     }
@@ -1481,7 +1580,7 @@ mod tests {
     #[test]
     fn paired_side_returns_none_when_no_sessions_exist() {
         let (view_a, view_b) = make_view_ids();
-        let sessions: Vec<DiffSession> = vec![];
+        let sessions = None;
         assert_eq!(paired_side(&sessions, view_a, view_b), None);
     }
 
@@ -1491,12 +1590,12 @@ mod tests {
         // partner_view returns the other view, never self, so source==dest
         // always falls into the "not partner" branch.
         let (view_a, view_b) = make_view_ids();
-        let sessions = vec![DiffSession::new(
-            view_a,
-            view_b,
+        let sessions = Some(DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
             make_doc_id(1),
             make_doc_id(2),
-        )];
+        ));
         assert_eq!(paired_side(&sessions, view_a, view_a), None);
         assert_eq!(paired_side(&sessions, view_b, view_b), None);
     }
@@ -1814,7 +1913,12 @@ mod tests {
         let (view_a, view_b) = make_view_ids();
         let doc_a = make_doc_id(1);
         let doc_b = make_doc_id(2);
-        let session = DiffSession::new(view_a, view_b, doc_a, doc_b);
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            doc_a,
+            doc_b,
+        );
 
         assert!(session.contains_doc(doc_a));
         assert!(session.contains_doc(doc_b));
@@ -1826,7 +1930,12 @@ mod tests {
         let doc_a = make_doc_id(1);
         let doc_b = make_doc_id(2);
         let unrelated = make_doc_id(3);
-        let session = DiffSession::new(view_a, view_b, doc_a, doc_b);
+        let session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            doc_a,
+            doc_b,
+        );
 
         assert!(!session.contains_doc(unrelated));
     }
@@ -1834,7 +1943,12 @@ mod tests {
     #[test]
     fn intra_line_cache_is_populated_after_compute_hunks() {
         let (view_a, view_b) = make_view_ids();
-        let mut session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let mut session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
         let rope_a = Rope::from("line1\nold\nline3\n");
         let rope_b = Rope::from("line1\nnew\nline3\n");
 
@@ -1848,7 +1962,12 @@ mod tests {
     #[test]
     fn intra_line_cache_matches_free_function() {
         let (view_a, view_b) = make_view_ids();
-        let mut session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let mut session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
         let rope_a = Rope::from("line1\nold\nline3\n");
         let rope_b = Rope::from("line1\nnew\nline3\n");
 
@@ -1865,7 +1984,12 @@ mod tests {
     #[test]
     fn intra_line_cache_is_empty_for_pure_addition() {
         let (view_a, view_b) = make_view_ids();
-        let mut session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let mut session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
         let rope_a = Rope::from("line1\nline3\n");
         let rope_b = Rope::from("line1\nnew\nline3\n");
 
@@ -1881,7 +2005,12 @@ mod tests {
     #[test]
     fn intra_line_cache_refreshes_on_update_if_changed() {
         let (view_a, view_b) = make_view_ids();
-        let mut session = DiffSession::new(view_a, view_b, make_doc_id(1), make_doc_id(2));
+        let mut session = DiffSession::new(
+            DiffSessionViewId::Persist(view_a),
+            DiffSessionViewId::Persist(view_b),
+            make_doc_id(1),
+            make_doc_id(2),
+        );
         let rope_a = Rope::from("line1\nold\nline3\n");
         let rope_b_v1 = Rope::from("line1\nnew\nline3\n");
         let rope_b_v2 = Rope::from("line1\ncompletely different\nline3\n");

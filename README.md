@@ -48,9 +48,15 @@ All shortcuts/keymaps can be found [in the documentation on the website](https:/
   - Display LSP name on the left of status line. Add configuration of "language-server-name" in config.toml to display the attached active lsp server name to the left of status line. e.g.  
   ```
   [editor.statusline]
-  left = ["mode", "register","spacer", "language-server-name","spacer","spinner", "file-encoding",  "read-only-indicator", "file-name", "file-modification-indicator"]
+  left = ["mode", "register","spacer", "language-server-name","spacer","spinner", "file-encoding",  "read-only-i ndicator", "file-name", "file-modification-indicator"]
   ```
-  - Add typable command changed_files_picker which takes input of a revision or branch to popup pick displaying what changes have been changed between local work directory and the specified commit or branch.
+  - Add typable command list_changed_files which takes input of a revision or branch and compare local workspace with files at that revision/branch, display all changed files in a popup file picker. 
+   - press enter the open the selected file
+   - press Alt + enter to open side by side diff view as per the specific comparing revision or branch. The file content at the revision or branch will be displayed left as transient document
+  - Based on [First pass at a very dumb two file diff view](https://github.com/helix-editor/helix/pull/15631) I simplified the solution, reducing multiple diff session support to single session support.
+   - When a new document is open, any open diff session will be closed
+   - When a new diff session is started, the previous is closed if it's still active
+   - When a diff session is closed, the transient document will be closed forcefully.
      
 # Features
 
