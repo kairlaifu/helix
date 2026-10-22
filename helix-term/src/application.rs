@@ -201,7 +201,7 @@ impl Application {
                 doc_b,
             );
             session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
-            editor.diff_sessions = Some(session);
+            editor.diff_sessions.push(session);
 
             editor.set_status(format!(
                 "Diff: {} vs {}",

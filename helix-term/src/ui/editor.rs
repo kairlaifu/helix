@@ -2105,7 +2105,7 @@ impl Component for EditorView {
             Self::render_bufferline(cx.editor, area.with_height(1), surface);
         }
 
-        if let Some(session) = &mut cx.editor.diff_sessions {
+        for session in &mut cx.editor.diff_sessions {
             let version_a = cx.editor.documents[&session.doc_a()].version();
             let version_b = cx.editor.documents[&session.doc_b()].version();
             if session.needs_update(version_a, version_b) {

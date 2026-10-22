@@ -347,6 +347,20 @@ fn force_buffer_close_all(
     let document_ids = buffer_gather_all_impl(cx.editor);
     buffer_close_by_ids_impl(cx, &document_ids, true)
 }
+fn vcs_diff_from_typable(
+    cx: &mut compositor::Context,
+    args: Args,
+    event: PromptEvent,
+) -> anyhow::Result<()> {
+    if event != PromptEvent::Validate {
+        return Ok(());
+    }
+    let rev_or_branch = args.get(0).map(|s| s.to_string());
+    if let Err(err) = do_vcs_diff_from(cx.editor, rev_or_branch) {
+        status::report_blocking(err);
+    }
+    anyhow::Ok(())
+}
 fn changed_file_picker_typable(
     cx: &mut compositor::Context,
     args: Args,
@@ -2371,7 +2385,9 @@ fn toggle_option(
     if event != PromptEvent::Validate {
         return Ok(());
     }
-
+    do_toggle_option(cx, args)
+}
+pub fn do_toggle_option(cx: &mut compositor::Context, args: Args) -> anyhow::Result<()> {
     let key = &args[0].to_lowercase();
 
     let key_error = || anyhow::anyhow!("Unknown key `{}`", key);
@@ -2796,7 +2812,7 @@ fn diff_open(cx: &mut compositor::Context, args: Args, event: PromptEvent) -> an
     );
     session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
 
-    cx.editor.diff_sessions = Some(session);
+    cx.editor.diff_sessions.push(session);
     cx.editor.set_status(format!(
         "Diff: {} vs {}",
         path_a.display(),
@@ -2994,41 +3010,36 @@ fn diff_off(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> an
         .diff_sessions
         .iter()
         .position(|s| s.contains_view(view_id));
-    if let Some(_) = idx {
-        cx.editor.diff_sessions = None;
+    if let Some(idx) = idx {
+        cx.editor.diff_sessions.remove(idx);
     }
     cx.editor.set_status("Diff session ended");
     Ok(())
 }
-pub fn diff_this_view(
-    cx: &mut compositor::Context,
-    view_id: DiffSessionViewId,
-) -> anyhow::Result<()> {
-    if cx.editor.diff_session_for(*view_id.view_id()).is_some() {
+pub fn diff_this_view(editor: &mut Editor, view_id: DiffSessionViewId) -> anyhow::Result<()> {
+    if editor.diff_session_for(*view_id.view_id()).is_some() {
         bail!("This view is already part of a diff session. Use :diff-off first.");
     }
 
-    if cx.editor.pending_diff_this.is_none() {
-        cx.editor.pending_diff_this = Some(view_id);
-        cx.editor
-            .set_status("Diff: marked first view. Run :diffthis in the second view.");
+    if editor.pending_diff_this.is_none() {
+        editor.pending_diff_this = Some(view_id);
+        editor.set_status("Diff: marked first view. Run :diffthis in the second view.");
         return Ok(());
     }
-    let other_view_id = cx.editor.pending_diff_this.as_ref().unwrap();
+    let other_view_id = editor.pending_diff_this.as_ref().unwrap();
 
     if other_view_id == &view_id {
-        cx.editor.pending_diff_this = None;
-        cx.editor
-            .set_status("Diff: cancelled (same view selected twice).");
+        editor.pending_diff_this = None;
+        editor.set_status("Diff: cancelled (same view selected twice).");
         return Ok(());
     }
 
-    let other_doc_id = cx.editor.tree.get(*other_view_id.view_id()).doc;
-    let this_doc_id = cx.editor.tree.get(*view_id.view_id()).doc;
+    let other_doc_id = editor.tree.get(*other_view_id.view_id()).doc;
+    let this_doc_id = editor.tree.get(*view_id.view_id()).doc;
 
-    let rope_a = cx.editor.documents[&other_doc_id].text().clone();
-    let rope_b = cx.editor.documents[&this_doc_id].text().clone();
-    let ignore_whitespace = cx.editor.config().diff_ignore_whitespace;
+    let rope_a = editor.documents[&other_doc_id].text().clone();
+    let rope_b = editor.documents[&this_doc_id].text().clone();
+    let ignore_whitespace = editor.config().diff_ignore_whitespace;
 
     let view_a = if let DiffSessionViewId::Persist(id) = other_view_id {
         DiffSessionViewId::Persist(*id)
@@ -3038,10 +3049,10 @@ pub fn diff_this_view(
     let mut session =
         helix_view::diff_session::DiffSession::new(view_a, view_id, other_doc_id, this_doc_id);
     session.compute_hunks_with_options(&rope_a, &rope_b, ignore_whitespace);
-    cx.editor.diff_sessions = Some(session);
-    cx.editor.set_status("Diff session started.");
+    editor.diff_sessions.push(session);
+    editor.set_status("Diff session started.");
 
-    cx.editor.pending_diff_this = None;
+    editor.pending_diff_this = None;
     Ok(())
 }
 
@@ -3051,7 +3062,7 @@ fn diff_this(cx: &mut compositor::Context, _args: Args, event: PromptEvent) -> a
     }
 
     let view_id = cx.editor.tree.focus;
-    diff_this_view(cx, DiffSessionViewId::Persist(view_id))
+    diff_this_view(cx.editor, DiffSessionViewId::Persist(view_id))
 }
 
 fn clear_register(
@@ -3446,6 +3457,17 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         completer: CommandCompleter::none(),
         signature: Signature {
             positionals: (1, Some(1)),
+            ..Signature::DEFAULT
+        },
+    },
+    TypableCommand {
+        name: "vcs_diff_from",
+        aliases: &["vdf"],
+        doc: "Display side-by-side diff between current open file and it is at the specified revision or branch, or if not supplied then HEAD.",
+        fun: vcs_diff_from_typable,
+        completer: CommandCompleter::none(),
+        signature: Signature {
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },

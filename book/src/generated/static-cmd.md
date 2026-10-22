@@ -110,6 +110,7 @@
 | `syntax_symbol_picker` | Open symbol picker from syntax information |  |
 | `lsp_or_syntax_symbol_picker` | Open symbol picker from LSP or syntax information | normal: `` <space>s ``, select: `` <space>s `` |
 | `list_changed_files` | Open file picker to display all changed files comparing local with the specified revision or branch |  |
+| `vcs_diff_from` | Display difference between current open file and it is at the specified revision or branch in a side-by-side view| normal: `` gq ``, select: `` gq `` |
 | `select_references_to_symbol_under_cursor` | Select symbol references | normal: `` <space>h ``, select: `` <space>h `` |
 | `workspace_symbol_picker` | Open workspace symbol picker |  |
 | `syntax_workspace_symbol_picker` | Open workspace symbol picker from syntax information |  |

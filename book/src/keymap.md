@@ -236,6 +236,7 @@ Jumps to various locations.
 | `m`   | Go to the last modified/alternate file           | `goto_last_modified_file`  |
 | `n`   | Go to next buffer                                | `goto_next_buffer`         |
 | `p`   | Go to previous buffer                            | `goto_previous_buffer`     |
+| `q`   | Open side-by-side diff view comparing current doc to it is at HEAD | `vcs_diff_from` |
 | `.`   | Go to last modification in current file          | `goto_last_modification`   |
 | `j`   | Move down textual (instead of visual) line       | `move_line_down`           |
 | `k`   | Move up textual (instead of visual) line         | `move_line_up`             |

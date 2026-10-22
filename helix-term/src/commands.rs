@@ -429,6 +429,7 @@ impl MappableCommand {
         syntax_symbol_picker, "Open symbol picker from syntax information",
         lsp_or_syntax_symbol_picker, "Open symbol picker from LSP or syntax information",
         list_changed_files, "Open changed file picker",
+        vcs_diff_from, "Open side-by-side view to show diff between current open document and it is at the specified revision or branch, if no input is supplied then it is default to HEAD.",
         select_references_to_symbol_under_cursor, "Select symbol references",
         workspace_symbol_picker, "Open workspace symbol picker",
         syntax_workspace_symbol_picker, "Open workspace symbol picker from syntax information",
@@ -3797,6 +3798,89 @@ fn list_changed_files(cx: &mut Context) {
         cx.push_layer(Box::new(overlaid(picker)));
     }
 }
+
+fn vcs_diff_from(cx: &mut Context) {
+    if let Err(err) = do_vcs_diff_from(cx.editor, None) {
+        status::report_blocking(err);
+    }
+}
+
+fn do_vcs_diff_from(editor: &mut Editor, rev_or_branch: Option<String>) -> anyhow::Result<()> {
+    let current_doc = doc!(editor);
+    let doc_path = current_doc.path();
+    if doc_path.is_none() {
+        return Err(anyhow!("There is no document open for diff."));
+    }
+    let path = doc_path.unwrap().display().to_string();
+    let path_ex = Path::new(path.as_str());
+    let doc_id = editor.new_file(Action::Replace);
+    let view_id = view!(editor).id;
+    let (view, doc) = (view_mut!(editor, view_id), doc_mut!(editor, &doc_id));
+    let rev_or_branch_opt = rev_or_branch.as_deref();
+    let trust_full = editor
+        .workspace_trust
+        .query(doc.workspace_root(), TrustQuery::Git)
+        .is_trusted();
+    let content_prev_rev_raw = editor
+        .diff_providers
+        .clone()
+        .file_at_revision_or_branch(trust_full, rev_or_branch_opt, Path::new(path.as_str()))
+        .unwrap_or(vec![]);
+    let content_at_prev_revision = String::from_utf8_lossy(&content_prev_rev_raw);
+
+    doc.ensure_view_init(view_id);
+    let transient_view_id = DiffSessionViewId::Transient(view_id);
+
+    let transaction = Transaction::change(
+        doc.text(),
+        [(
+            0,
+            doc.text().len_chars(),
+            Some(content_at_prev_revision.into()),
+        )]
+        .into_iter(),
+    )
+    .with_selection(Selection::point(0));
+    doc.apply(&transaction, view_id);
+    doc.append_changes_to_history(view);
+    let rev_or_branch_str = rev_or_branch.clone().unwrap_or("HEAD".to_string());
+    editor.set_doc_path(
+        doc_id,
+        Path::new(
+            format!(
+                "{}@{}",
+                &&transient_view_id.file_path(&rev_or_branch_str).as_str(),
+                path_ex
+                    .file_name()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("unknown")
+            )
+            .as_str(),
+        ),
+    );
+
+    if let Some(id_view_to_close) = editor.close_diff_transient_docs(view_id) {
+        editor.close(id_view_to_close);
+    }
+    typed::diff_this_view(editor, transient_view_id)?;
+
+    match editor.open(Path::new(path.as_str()), Action::VerticalSplit) {
+        Err(e) => {
+            let err = if let Some(err) = e.source() {
+                format!("{}", err)
+            } else {
+                format!("unable to open \"{}\"", path)
+            };
+            editor.set_error(err);
+        }
+        Ok(_local_doc_id) => {
+            let local_view_id = editor.tree.focus;
+            typed::diff_this_view(editor, DiffSessionViewId::Persist(local_view_id))?;
+        }
+    }
+    anyhow::Ok(())
+}
+
 fn new_changed_file_picker(
     editor: &mut Editor,
     rev_or_branch: Option<String>,
@@ -3814,8 +3898,9 @@ fn new_changed_file_picker(
 
     let diff_open_handler: PickerKeyHandler<FileChange, FileChangeData> =
         Box::new(|cx, change, m, _| {
+            let path_ex = change.path();
             let path = change.path().display().to_string();
-            let path_ex = Path::new(path.as_str());
+            // let path_ex = Path::new(path.as_str());
             let doc_id = cx.editor.new_file(Action::Replace);
             let view_id = view!(cx.editor).id;
             let (view, doc) = (view_mut!(cx.editor, view_id), doc_mut!(cx.editor, &doc_id));
@@ -3836,10 +3921,14 @@ fn new_changed_file_picker(
             doc.ensure_view_init(view_id);
             let transient_view_id = DiffSessionViewId::Transient(view_id);
 
-            let transaction = Transaction::insert(
+            let transaction = Transaction::change(
                 doc.text(),
-                &Selection::point(0),
-                content_at_prev_revision.into(),
+                [(
+                    0,
+                    doc.text().len_chars(),
+                    Some(content_at_prev_revision.into()),
+                )]
+                .into_iter(),
             )
             .with_selection(Selection::point(0));
             doc.apply(&transaction, view_id);
@@ -3865,7 +3954,7 @@ fn new_changed_file_picker(
             if let Some(id_view_to_close) = cx.editor.close_diff_transient_docs(view_id) {
                 cx.editor.close(id_view_to_close);
             }
-            if let Err(err) = typed::diff_this_view(cx, transient_view_id) {
+            if let Err(err) = typed::diff_this_view(cx.editor, transient_view_id) {
                 log::error!("{err}");
                 return;
             }
@@ -3884,12 +3973,11 @@ fn new_changed_file_picker(
                 Ok(_local_doc_id) => {
                     let local_view_id = cx.editor.tree.focus;
                     if let Err(err) =
-                        typed::diff_this_view(cx, DiffSessionViewId::Persist(local_view_id))
+                        typed::diff_this_view(cx.editor, DiffSessionViewId::Persist(local_view_id))
                     {
                         log::error!("{err}");
                         return;
                     }
-                    // goto_next_change_impl_generic(1, cx.editor, Direction::Forward);
                 }
             }
         });

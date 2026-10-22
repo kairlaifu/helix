@@ -1355,7 +1355,7 @@ pub struct Editor {
     pub language_servers: helix_lsp::Registry,
     pub diagnostics: Diagnostics,
     pub diff_providers: DiffProviderRegistry,
-    pub diff_sessions: Option<crate::diff_session::DiffSession>,
+    pub diff_sessions: Vec<crate::diff_session::DiffSession>,
     /// Holds the first view that called `:diffthis`, waiting for a second call to complete the pair.
     pub pending_diff_this: Option<DiffSessionViewId>,
 
@@ -1508,7 +1508,7 @@ impl Editor {
             language_servers,
             diagnostics: Diagnostics::new(),
             diff_providers: DiffProviderRegistry::default(),
-            diff_sessions: None,
+            diff_sessions: Vec::new(),
             pending_diff_this: None,
             debug_adapters: dap::registry::Registry::new(),
             breakpoints: HashMap::new(),
@@ -2233,7 +2233,6 @@ impl Editor {
             .iter()
             .find(|s| s.contains_view(closing_view_id))
         {
-            log::error!("diff session found on close");
             let transient_views = diff_session.transient_views();
             transient_views.iter().for_each(|view_id| {
                 if self.tree.contains(*view_id) {
@@ -2259,11 +2258,7 @@ impl Editor {
             self.tree.remove(id);
         }
         // Prune any diff sessions whose view or pending marker matches the closed view.
-        if let Some(diff_session) = &self.diff_sessions {
-            if diff_session.contains_view(id) {
-                self.diff_sessions = None;
-            }
-        }
+        self.diff_sessions.retain(|s| !s.contains_view(id));
 
         if let Some(view_id) = &self.pending_diff_this {
             if *view_id.view_id() == id {
@@ -2286,11 +2281,8 @@ impl Editor {
         // This will also disallow any follow-up writes
         self.saves.remove(&doc_id);
         // Prune any diff sessions that reference the document being closed.
-        if let Some(diff_session) = &self.diff_sessions {
-            if diff_session.contains_doc(doc_id) {
-                self.diff_sessions = None;
-            }
-        }
+        self.diff_sessions.retain(|s| !s.contains_doc(doc_id));
+
         enum Action {
             Close(ViewId),
             ReplaceDoc(ViewId, DocumentId),

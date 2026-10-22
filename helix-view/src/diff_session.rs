@@ -292,6 +292,7 @@ impl DiffSession {
         }
         res
     }
+
     pub fn view_b(&self) -> ViewId {
         *self.view_b.view_id()
     }
@@ -436,6 +437,7 @@ impl DiffSession {
             None
         }
     }
+
     /// Returns which side of the diff session the given view is on.
     pub fn side_for_view(&self, view_id: ViewId) -> Option<DiffSide> {
         if view_id == *self.view_a.view_id() {
@@ -548,18 +550,16 @@ fn apply_offset(line: u32, offset: i64) -> u32 {
 /// authorizes the caller to write to `dest`'s selection. Returning `None`
 /// means the caller must skip - either no session pairs them, or the session
 /// has changed shape since the focus event arrived.
-pub fn paired_side(
-    session: &Option<DiffSession>,
-    source: ViewId,
-    dest: ViewId,
-) -> Option<DiffSide> {
-    let Some(diff_session) = session else {
-        return None;
-    };
-    if diff_session.partner_view(source) != Some(dest) {
-        return None;
-    }
-    diff_session.side_for_view(source)
+pub fn paired_side(sessions: &[DiffSession], source: ViewId, dest: ViewId) -> Option<DiffSide> {
+    sessions
+        .iter()
+        .find(|s| s.contains_view(source))
+        .and_then(|s| {
+            if s.partner_view(source) != Some(dest) {
+                return None;
+            }
+            s.side_for_view(source)
+        })
 }
 
 /// Returns an iterator over hunks whose range on `side` intersects any of the given line
@@ -1527,7 +1527,7 @@ mod tests {
             make_doc_id(1),
             make_doc_id(2),
         );
-        let sessions = Some(session);
+        let sessions = vec![session];
 
         // Source on side A, partner on side B: returns A.
         assert_eq!(paired_side(&sessions, view_a, view_b), Some(DiffSide::A));
@@ -1544,12 +1544,20 @@ mod tests {
         let view_c = sm.insert(());
         let view_d = sm.insert(());
 
-        let sessions = Some(DiffSession::new(
-            DiffSessionViewId::Persist(view_a),
-            DiffSessionViewId::Persist(view_b),
-            make_doc_id(1),
-            make_doc_id(2),
-        ));
+        let sessions = vec![
+            DiffSession::new(
+                DiffSessionViewId::Persist(view_a),
+                DiffSessionViewId::Persist(view_b),
+                make_doc_id(1),
+                make_doc_id(2),
+            ),
+            DiffSession::new(
+                DiffSessionViewId::Persist(view_c),
+                DiffSessionViewId::Persist(view_d),
+                make_doc_id(3),
+                make_doc_id(4),
+            ),
+        ];
 
         // view_a's partner is view_b, not view_c. Cross-session sync is denied.
         assert_eq!(paired_side(&sessions, view_a, view_c), None);
@@ -1567,12 +1575,12 @@ mod tests {
         let view_b = sm.insert(());
         let outsider = sm.insert(());
 
-        let sessions = Some(DiffSession::new(
+        let sessions = vec![DiffSession::new(
             DiffSessionViewId::Persist(view_a),
             DiffSessionViewId::Persist(view_b),
             make_doc_id(1),
             make_doc_id(2),
-        ));
+        )];
         assert_eq!(paired_side(&sessions, outsider, view_a), None);
         assert_eq!(paired_side(&sessions, outsider, view_b), None);
     }
@@ -1580,7 +1588,7 @@ mod tests {
     #[test]
     fn paired_side_returns_none_when_no_sessions_exist() {
         let (view_a, view_b) = make_view_ids();
-        let sessions = None;
+        let sessions: Vec<DiffSession> = vec![];
         assert_eq!(paired_side(&sessions, view_a, view_b), None);
     }
 
@@ -1590,12 +1598,12 @@ mod tests {
         // partner_view returns the other view, never self, so source==dest
         // always falls into the "not partner" branch.
         let (view_a, view_b) = make_view_ids();
-        let sessions = Some(DiffSession::new(
+        let sessions = vec![DiffSession::new(
             DiffSessionViewId::Persist(view_a),
             DiffSessionViewId::Persist(view_b),
             make_doc_id(1),
             make_doc_id(2),
-        ));
+        )];
         assert_eq!(paired_side(&sessions, view_a, view_a), None);
         assert_eq!(paired_side(&sessions, view_b, view_b), None);
     }
