@@ -669,7 +669,7 @@ fn query_indents<'a>(
     result
 }
 
-fn is_trivia(node: &Node) -> bool {
+fn is_extra(node: &Node) -> bool {
     node.is_extra() && node.kind() != "ERROR"
 }
 
@@ -745,6 +745,42 @@ fn extend_nodes<'a>(
     false
 }
 
+/// Returns the last child of `node` before `byte_pos`, skipping extra nodes. If the
+/// parser closed both `node` and the child before it with MISSING tokens, that
+/// child is the innermost open node and is returned instead.
+fn last_child<'a>(node: &Node<'a>, byte_pos: u32) -> Option<Node<'a>> {
+    let mut children = node
+        .children()
+        .filter(|child| child.end_byte() <= byte_pos && !is_extra(child));
+    let mut last = children.next()?;
+    let mut prev = None;
+    for child in children {
+        prev = Some(std::mem::replace(&mut last, child));
+    }
+    match prev {
+        Some(prev)
+            if last.is_missing() && prev.end_byte() == last.start_byte() && is_unclosed(&prev) =>
+        {
+            Some(prev)
+        }
+        _ => Some(last),
+    }
+}
+
+/// Whether `node` is an ERROR or its last token is MISSING.
+fn is_unclosed(node: &Node) -> bool {
+    let mut node = node.clone();
+    loop {
+        if node.is_missing() || node.kind() == "ERROR" {
+            return true;
+        }
+        match node.children().filter(|child| !is_extra(child)).last() {
+            Some(child) => node = child,
+            None => return false,
+        }
+    }
+}
+
 /// When a newline is typed after a header (`while (c)`, `if x:`), the body it
 /// opens begins on the *next* line — a following sibling the upward indent walk
 /// never reaches, which is why brace-less bodies need either a wrapper `@indent`
@@ -781,7 +817,7 @@ fn candidate_body_for_new_line<'a>(
                 if cursor.node().id() == node.id() {
                     if cursor.goto_next_sibling() {
                         // Step over a trailing comment on the header line.
-                        while is_trivia(&cursor.node())
+                        while is_extra(&cursor.node())
                             && cursor.node().end_byte() <= byte_pos
                             && cursor.goto_next_sibling()
                         {}
@@ -832,14 +868,11 @@ fn init_indent_query<'a, 'b>(
         // The query range should intersect with all nodes directly preceding
         // the position of the indent query in case one of them is extended.
         // A trailing comment belongs to the node before it
-        let mut deepest_preceding = node
-            .children()
-            .filter(|child| child.byte_range().end <= byte_pos && !is_trivia(child))
-            .last();
+        let mut deepest_preceding = last_child(&node, byte_pos);
         // Get the deepest directly preceding node
         while let Some(last) = deepest_preceding
             .as_ref()
-            .and_then(|prec| prec.children().filter(|c| !is_trivia(c)).last())
+            .and_then(|prec| last_child(prec, byte_pos))
         {
             deepest_preceding = Some(last);
         }
@@ -882,6 +915,43 @@ fn init_indent_query<'a, 'b>(
         .map(|body| node = body.clone())
         .is_some();
 
+    // When the parser closes an unfinished node with a zero-width MISSING token,
+    // as it does for `struct S {`, the node is still open.
+    if let Some(missing) = deepest_preceding
+        .as_ref()
+        .filter(|node| !descended && new_line_byte_pos.is_some() && node.is_missing())
+    {
+        // The token may be wrapped in a node of its own.
+        let mut open = missing.parent();
+        while let Some(parent) = open
+            .as_ref()
+            .filter(|node| node.start_byte() == missing.start_byte())
+            .and_then(|node| node.parent())
+        {
+            open = Some(parent);
+        }
+        if let Some(open) = open {
+            return Some((open, query_result.indent_captures, opaque_ranges, true));
+        }
+    }
+
+    // With auto-pairs off, a typed `{`, `(` or `[` has no closing bracket yet and
+    // ends up in an ERROR node. Indent the next line as if it were closed.
+    if let Some(open) = deepest_preceding.as_ref().filter(|node| {
+        !descended
+            && new_line_byte_pos.is_some()
+            && matches!(node.kind(), "{" | "(" | "[")
+            && text.byte_to_line(node.start_byte() as usize) == line
+            && node.parent().is_some_and(|parent| parent.kind() == "ERROR")
+    }) {
+        let mut captures = query_result.indent_captures;
+        captures.entry(open.id()).or_default().push(IndentCapture {
+            capture_type: IndentCaptureType::Indent,
+            header: false,
+        });
+        return Some((open.clone(), captures, opaque_ranges, true));
+    }
+
     // Check for extend captures, potentially changing the node that the indent calculation starts with
     let mut extended = false;
     if let Some(deepest_preceding) = deepest_preceding {
@@ -898,7 +968,7 @@ fn init_indent_query<'a, 'b>(
         }
     }
     let delimited = {
-        let mut children = node.children().filter(|child| !is_trivia(child));
+        let mut children = node.children().filter(|child| !is_extra(child));
         match (children.next(), children.last()) {
             (Some(first), Some(last)) => !first.is_named() && !last.is_named(),
             _ => false,
@@ -924,6 +994,30 @@ fn opaque_hit(start: u32, end: u32, byte_pos: u32, text: RopeSlice) -> bool {
         && text.byte_to_line(start as usize) < text.byte_to_line(byte_pos as usize)
 }
 
+/// Returns the indent query and syntax tree for `byte_pos`, and whether they
+/// belong to an injected language. A same-language injection, like a Rust macro's
+/// token trees, uses the document's, since the root walk already indents it.
+fn layer_at<'q, 't>(
+    query: &'q IndentQuery,
+    syntax: &'t Syntax,
+    loader: &'q syntax::Loader,
+    byte_pos: u32,
+) -> (&'q IndentQuery, Node<'t>, bool) {
+    let layer = syntax.layer_for_byte_range(byte_pos, byte_pos);
+    let injected = (layer != syntax.root_layer()
+        && syntax.layer(layer).language != syntax.root_language())
+    .then(|| loader.indent_query(syntax.layer(layer).language))
+    .flatten();
+    match injected {
+        Some(query) => (
+            query,
+            syntax.tree_for_byte_range(byte_pos, byte_pos).root_node(),
+            true,
+        ),
+        None => (query, syntax.tree().root_node(), false),
+    }
+}
+
 /// Whether `byte_pos` lies in the *interior* of a node captured `@opaque` — a
 /// string / heredoc / block-comment body that began on an earlier line. The
 /// leading whitespace of such lines is literal content, so indentation must
@@ -935,10 +1029,11 @@ fn opaque_hit(start: u32, end: u32, byte_pos: u32, text: RopeSlice) -> bool {
 pub fn is_opaque_interior(
     query: &IndentQuery,
     syntax: &Syntax,
+    loader: &syntax::Loader,
     text: RopeSlice,
     byte_pos: u32,
 ) -> bool {
-    let root = syntax.tree_for_byte_range(byte_pos, byte_pos).root_node();
+    let (query, root, _) = layer_at(query, syntax, loader, byte_pos);
     query_indents(query, &root, text, byte_pos..byte_pos + 1, None)
         .opaque_ranges
         .iter()
@@ -971,21 +1066,7 @@ pub fn treesitter_indent_for_pos<'a>(
     }
     // Inside an injection layer indent with that language's query and tree,
     // then shift the whole result by the injection's base indent.
-    let layer = syntax.layer_for_byte_range(byte_pos, byte_pos);
-    // Only a *different* language injection needs special handling; a
-    // same-language injection (e.g. rust macro token-trees) is already indented
-    // correctly by the root walk, and offsetting it would double-count.
-    let injected = (layer != syntax.root_layer()
-        && syntax.layer(layer).language != syntax.root_language())
-    .then(|| loader.indent_query(syntax.layer(layer).language))
-    .flatten();
-    let query = injected.unwrap_or(query);
-    let tree = if injected.is_some() {
-        syntax.tree_for_byte_range(byte_pos, byte_pos)
-    } else {
-        syntax.tree()
-    };
-    let root = tree.root_node();
+    let (query, root, injected) = layer_at(query, syntax, loader, byte_pos);
 
     // Compute the indent by *scope containment*: the level of a line is the
     // number of `@indent` scopes that contain it (see `containment_accounting`).
@@ -1014,7 +1095,7 @@ pub fn treesitter_indent_for_pos<'a>(
     // The injected walk above is relative to the injection's own tree root (the
     // embedded code starts at level 0). Shift it by the indent of the injection's
     // first content line so it sits where the host language placed the block.
-    if injected.is_some() {
+    if injected {
         result.indent += injection_base_level(syntax, text, byte_pos, tab_width, indent_width);
     }
     Some(result)
@@ -1113,6 +1194,8 @@ fn containment_accounting<'a>(
     // Same-line collapse: a scope contributes at most one level per physical line
     // it opens on.
     let mut counted_start_lines: Vec<usize> = Vec::new();
+    // The aligned node's start line and levels.
+    let mut inside_align: Option<(usize, usize, usize)> = None;
 
     let mut node = start_node;
     loop {
@@ -1164,6 +1247,14 @@ fn containment_accounting<'a>(
             // dedents.
             let opens_target = node_start == target_line;
 
+            // Innermost containing alignment wins (first seen on the upward walk).
+            if let Some(a) = node_align {
+                if contains && align.is_none() {
+                    align = Some(a);
+                    inside_align = Some((start, counted_start_lines.len(), indent_always));
+                }
+            }
+
             if (has_indent || has_indent_always) && (has_outdent || has_outdent_always) {
                 // A node carrying both indent and outdent (e.g. swift's nested
                 // else-if `(if_statement (if_statement) @outdent)`) cancels its own
@@ -1183,12 +1274,6 @@ fn containment_accounting<'a>(
                     outdent_always += 1;
                 }
             }
-            // Innermost containing alignment wins (first seen on the upward walk).
-            if let Some(a) = node_align {
-                if contains && align.is_none() {
-                    align = Some(a);
-                }
-            }
         }
         match node.parent() {
             Some(parent) => node = parent,
@@ -1196,12 +1281,14 @@ fn containment_accounting<'a>(
         }
     }
 
-    // `@align` is an absolute alignment (to the anchor column); the containment
-    // levels it spans are already encoded in that column, so don't stack them on
-    // top.
-    if align.is_some() {
-        indent_levels = 0;
-        indent_always = 0;
+    // Only scopes inside the aligned node add to the anchor column, except one
+    // opening on the node's first line.
+    if let Some((align_start, inner, inner_always)) = inside_align {
+        indent_levels = counted_start_lines[..inner]
+            .iter()
+            .filter(|&&start| start != align_start)
+            .count();
+        indent_always = inner_always;
     }
     Some((
         Indentation {
@@ -1238,10 +1325,15 @@ fn injection_base_level(
     };
     let bl = text.byte_to_line(byte_pos as usize);
     let first = if in_layer(bl) {
-        // Inside the injection: walk back to its first content line.
+        // Inside the injection: walk back to its first content line, skipping
+        // blank lines.
         let mut f = bl;
-        while f > 0 && in_layer(f - 1) {
-            f -= 1;
+        for prev in (0..bl).rev() {
+            if in_layer(prev) {
+                f = prev;
+            } else if text.line(prev).first_non_whitespace_char().is_some() {
+                break;
+            }
         }
         f
     } else {
@@ -1258,18 +1350,16 @@ fn injection_base_level(
 }
 
 /// Whether the token at `byte_pos` (expected to be the first token on its line)
-/// is captured `@outdent`/`@outdent.always` by the indent query — i.e. the
-/// editor dedents that line as the token is entered (a closing bracket, a
-/// `case`/`else`/`except` keyword, …). Used to tell a *recoverable* typing
-/// over-indent (the leading token will pull the line back) from a real one (a
-/// plain statement that the new-line indent placed too deep).
+/// is captured `@outdent` or `@outdent.always` by the indent query, like a
+/// closing bracket or an `else`.
 pub fn is_outdent_token_at(
     query: &IndentQuery,
     syntax: &Syntax,
+    loader: &syntax::Loader,
     text: RopeSlice,
     byte_pos: u32,
 ) -> bool {
-    let root = syntax.tree_for_byte_range(byte_pos, byte_pos).root_node();
+    let (query, root, _) = layer_at(query, syntax, loader, byte_pos);
     let Some(mut node) = root.descendant_for_byte_range(byte_pos, byte_pos) else {
         return false;
     };
